@@ -1,0 +1,14 @@
+{
+  "name": "asint",
+  "owner": {
+    "name": "leonrlr4"
+  },
+  "description": "asint, a terminal dashboard for Claude Code",
+  "plugins": [
+    {
+      "name": "asint",
+      "source": "./",
+      "description": "A terminal dashboard for Claude Code"
+    }
+  ]
+}

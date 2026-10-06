@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Opens a web page with terminal-browser beside the kitty window Claude runs in (for static pages; pages that need touchpad
+# gestures go through asint-open to the system default browser).
+# terminal-browser uses KITTY_WINDOW_ID to pick the window to split; when Claude was forked by a daemon the variable is missing,
+# so walk up the parent processes until one matches a window pid in `kitty @ ls`. If nothing works (not kitty), fall back to asint-open.
+set -uo pipefail
+target=${1:?usage: asint-tb <file or URL>}
+if [ -z "${KITTY_WINDOW_ID:-}" ] && [ -n "${KITTY_LISTEN_ON:-}" ]; then
+  pids=" "; p=$$
+  while [ "$p" -gt 1 ]; do pids="$pids$p "; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
+  KITTY_WINDOW_ID=$(kitty @ --to "$KITTY_LISTEN_ON" ls 2>/dev/null | python3 -c '
+import json, sys
+pids = set(sys.argv[1].split())
+for o in json.load(sys.stdin):
+    for t in o["tabs"]:
+        for w in t["windows"]:
+            if str(w["pid"]) in pids: print(w["id"]); sys.exit()
+' "$pids") && export KITTY_WINDOW_ID
+fi
+tb=$(command -v terminal-browser || echo "$HOME/.local/bin/terminal-browser")
+if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$tb" ] && "$tb" new-tab "$target" >/dev/null 2>&1; then exit 0; fi
+exec "$(dirname "$0")/asint-open" "$target"

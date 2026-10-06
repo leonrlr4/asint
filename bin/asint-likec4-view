@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Opens LikeC4's full interactive viewer (drag, zoom, drill into the next level, dynamic flows) in the system default browser.
+# Usage: asint-likec4-view <directory with .c4 files> [view id]
+# Each directory shares one `likec4 start` dev server (port derived from the path) that hot-reloads on file changes; it keeps running and is reused next time.
+set -euo pipefail
+dir=$(realpath "${1:?usage: asint-likec4-view <directory> [view id]}")
+view=${2:-index}
+# likec4: ASINT_LIKEC4, then likec4 on PATH, then npx.
+if [ -n "${ASINT_LIKEC4:-}" ]; then L=("$ASINT_LIKEC4"); elif command -v likec4 >/dev/null; then L=(likec4); else L=(npx -y likec4@1.59.4); fi
+port=$((47100 + $(printf '%s' "$dir" | cksum | cut -d' ' -f1) % 400))
+url="http://127.0.0.1:$port"
+
+if ! curl -fs -o /dev/null "$url/"; then
+  log=/tmp/asint-arch/likec4-$port.log
+  mkdir -p /tmp/asint-arch
+  setsid nohup "${L[@]}" start --listen 127.0.0.1 --port "$port" "$dir" >"$log" 2>&1 < /dev/null &
+  for _ in $(seq 1 60); do
+    curl -fs -o /dev/null "$url/" && break
+    sleep 0.5
+  done
+fi
+# Open in a real window of the system default browser: touchpad gestures such as pinch zoom and three-finger drag (libinput drag_3fg)
+# only reach graphical windows. The terminal mouse protocol carries buttons, wheel and motion but no zoom gesture, so terminal-browser is not used.
+setsid -f xdg-open "$url/view/$view/" >/dev/null 2>&1

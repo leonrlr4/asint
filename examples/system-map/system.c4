@@ -1,0 +1,76 @@
+// Example system layer for a workspace with three repos. Put a file like this in
+// <workspace>/<vault>/02-Architecture/system-maps/ and asint finds it from any repo below <workspace>.
+// Each element that stands for a repo points at it with metadata { repo '<path from this folder>' };
+// opening that element in ARCH switches to the repo's own docs/architecture.c4.
+specification {
+  element person {
+    style {
+      shape person
+    }
+  }
+  element system
+  element app
+  element database {
+    style {
+      shape cylinder
+    }
+  }
+  element external {
+    style {
+      color muted
+    }
+  }
+}
+
+model {
+  shopper = person 'Shopper'
+  staff = person 'Staff'
+
+  shop = system 'Shop' {
+    description 'The storefront customers use'
+
+    web = app 'shop-web' {
+      description 'React storefront'
+      metadata {
+        repo '../../../shop-web'
+      }
+    }
+    api = app 'shop-api' {
+      description 'Orders, catalog and checkout API'
+      metadata {
+        repo '../../../shop-api'
+      }
+    }
+
+    web -> api 'REST'
+  }
+
+  backoffice = system 'Back office' {
+    description 'Order handling for staff'
+    metadata {
+      repo '../../../backoffice'
+    }
+  }
+
+  db = database 'Postgres'
+  payments = external 'Payment provider'
+
+  shopper -> shop.web 'browses and buys'
+  staff -> backoffice 'handles orders'
+  backoffice -> shop.api 'admin endpoints'
+  shop.api -> db 'SQL'
+  shop.api -> payments 'charges cards'
+}
+
+views {
+  view index {
+    title 'Systems'
+    include *
+    autoLayout LeftRight
+  }
+  view shop of shop {
+    title 'Shop'
+    include *
+    autoLayout LeftRight
+  }
+}

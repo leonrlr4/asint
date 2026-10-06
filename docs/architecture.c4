@@ -1,0 +1,142 @@
+// asint architecture diagram (LikeC4). The ARCH panel reads this file and updates within seconds of a save; click a box to drill down.
+specification {
+  element person {
+    style {
+      shape person
+    }
+  }
+  element system
+  element module
+  element external {
+    style {
+      color muted
+    }
+  }
+  element file {
+    style {
+      shape document
+      color muted
+    }
+  }
+}
+
+model {
+  user = person 'User' 'Types, clicks, pastes images'
+
+  cc = system 'Claude Code engine' {
+    description '2.1.291, provides hooks and UI elements'
+  }
+
+  asint = system 'asint mod' {
+    description 'A personal Claude Code interface'
+
+    register = module 'register.tsx' {
+      description 'All hooks; the only file that touches the engine API'
+    }
+    session = module 'model.ts' {
+      description 'Session data: files, commands, agents, checklist'
+    }
+    panels = module 'views.tsx' {
+      description 'Panel views (including the project file tree), zen, compact stats'
+    }
+    layout = module 'layout.ts' {
+      description 'tmux-style split tree'
+    }
+    editor = module 'editor.tsx' {
+      description 'Layout editor (Client, receives mouse drags)'
+    }
+    map = module 'map.ts + canvas.ts' {
+      description 'Raster braille canvas; radar, relation graph, heat, board'
+    }
+    theme = module 'palette.ts' {
+      description 'Derives colors from the Omarchy theme'
+    }
+    anim = module 'spinner + shimmer' {
+      description 'Decode animation and shimmer, shared by all skins'
+    }
+    prompt = module 'prompt.tsx' {
+      description 'Bar above the prompt: name, location, pasted images'
+    }
+    live = module 'live.ts' {
+      description 'Reads the file being edited from streaming tool arguments'
+    }
+    image = module 'image.ts' {
+      description 'PNG dimensions'
+    }
+
+    register -> session 'Tool calls, agents, turns'
+    register -> panels 'ViewCtx'
+    panels -> layout 'Cell positions'
+    register -> editor 'Edit mode'
+    register -> map '100ms tick'
+    register -> theme 'Every 5 seconds'
+    register -> anim
+    register -> prompt 'Location, images, name'
+    prompt -> image 'Thumbnail aspect ratio'
+    register -> image 'Diagram size'
+    register -> live 'turn.step stream'
+    panels -> live 'FILES live edits'
+  }
+
+  ext = system 'External' {
+    omarchy = file 'Omarchy theme files'
+    layoutjson = file 'layout.json'
+    git = external 'git'
+    haiku = external 'haiku' {
+      description 'Names the session'
+    }
+    btw = external '/btw' {
+      description 'Plain-language button'
+    }
+    images = file 'Pasted images images/<n>.png'
+    mediaprep = external 'media-prep'
+    browser = external 'terminal-browser'
+    brave = external 'System browser' {
+      description 'Full diagram: touchpad zoom, three-finger drag'
+    }
+    likec4 = external 'likec4 CLI' {
+      description 'Exports this diagram as JSON'
+    }
+    systemMaps = file 'Team vault system-maps' {
+      description 'System-level LikeC4 diagrams (multi-repo); asint generates Mermaid for Obsidian'
+    }
+    store = file 'asint store' {
+      description 'Collapsed state, session names'
+    }
+  }
+
+  user -> cc 'Types, clicks'
+  cc -> asint.register 'hooks'
+  asint.register -> cc 'MAP commands, diagram buttons: session.send, prompt.submit'
+  asint.register -> cc 'prompt.compose: keep output in the terminal, diagram rules; blocks Claude Docs'
+  asint.theme -> ext.omarchy 'Reads'
+  asint.layout -> ext.layoutjson 'Reads and writes'
+  asint.register -> ext.git 'repo, branch, uncommitted count'
+  asint.register -> ext.haiku 'First few messages'
+  asint.register -> ext.btw 'Plain-language explanation'
+  asint.register -> ext.images 'Reads the draft every 250ms'
+  asint.register -> ext.mediaprep 'Media to PNG frames'
+  asint.register -> ext.browser '/html -t split'
+  asint.register -> ext.brave 'Full ARCH view, Artifact html, 3D, /html'
+  asint.register -> ext.likec4 'Exports only when mtime changes; system level to Mermaid'
+  asint.register -> ext.systemMaps 'Finds the system level upward, writes views/*.md'
+  asint.register -> ext.store 'Collapsed state, names'
+}
+
+views {
+  view index {
+    title 'Overview'
+    include *
+    autoLayout LeftRight
+  }
+  view asint of asint {
+    title 'asint mod'
+    include *
+    autoLayout LeftRight
+  }
+  view ext of ext {
+    title 'External'
+    include *
+    autoLayout LeftRight
+  }
+}

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Converts a media file into PNG frames for asint's MEDIA panel and prints JSON:
+#   {"kind":"image"|"anim"|"model","width":W,"height":H,"fps":F,"frames":[...]}
+# image → one PNG; GIF / animated WebP / video → a PNG sequence of at most 30 seconds at 12fps (no audio);
+# 3D model → a three.js page with the model embedded, opened by terminal-browser as a rotatable viewer.
+set -euo pipefail
+src=$(realpath "${1:?usage: media-prep <file> <output dir>}")
+out=${2:?}
+MAXW=960 FPS=12 SECS=30
+rm -rf "$out"; mkdir -p "$out"; out=$(realpath "$out")
+ext=${src##*.}; ext=${ext,,}
+
+json_frames() { # kind fps
+  local first; first=$(ls "$out"/f-*.png | head -1)
+  read -r w h < <(magick identify -format '%w %h\n' "$first" | head -1)
+  printf '{"kind":"%s","width":%d,"height":%d,"fps":%d,"frames":[' "$1" "$w" "$h" "$2"
+  ls "$out"/f-*.png | awk 'NR>1{printf ","}{printf "\"%s\"", $0}'
+  printf ']}\n'
+}
+
+case $ext in
+  glb|gltf|stl|obj|ply)
+    b64=$(base64 -w0 "$src")
+    cat > "$out/viewer.html" <<HTML
+<!doctype html><html><head><meta charset="utf-8"><title>$(basename "$src")</title>
+<style>html,body{margin:0;height:100%;background:#1d2021;color:#ebdbb2;font-family:sans-serif;overflow:hidden}#t{position:fixed;top:8px;left:12px;opacity:.7}</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head><body><div id="t">$(basename "$src") · drag to rotate, scroll to zoom</div><script type="module">
+import * as THREE from 'three'
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js'
+const ext='$ext', data=Uint8Array.from(atob('$b64'),c=>c.charCodeAt(0)).buffer
+const scene=new THREE.Scene(), cam=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.01,1e5)
+const r=new THREE.WebGLRenderer({antialias:true}); r.setSize(innerWidth,innerHeight); r.setClearColor(0x1d2021); document.body.append(r.domElement)
+scene.add(new THREE.HemisphereLight(0xffffff,0x444444,2.5)); const d=new THREE.DirectionalLight(0xffffff,2); d.position.set(3,5,4); scene.add(d)
+const mat=new THREE.MeshStandardMaterial({color:0xd5c4a1,metalness:.1,roughness:.6})
+let obj
+if(ext==='glb'||ext==='gltf'){const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js'); obj=(await new GLTFLoader().parseAsync(ext==='gltf'?new TextDecoder().decode(data):data,'')).scene}
+else if(ext==='stl'){const {STLLoader}=await import('three/addons/loaders/STLLoader.js'); obj=new THREE.Mesh(new STLLoader().parse(data),mat)}
+else if(ext==='ply'){const {PLYLoader}=await import('three/addons/loaders/PLYLoader.js'); const g=new PLYLoader().parse(data); g.computeVertexNormals(); obj=new THREE.Mesh(g,mat)}
+else {const {OBJLoader}=await import('three/addons/loaders/OBJLoader.js'); obj=new OBJLoader().parse(new TextDecoder().decode(data)); obj.traverse(m=>{if(m.isMesh)m.material=mat})}
+scene.add(obj)
+const box=new THREE.Box3().setFromObject(obj), size=box.getSize(new THREE.Vector3()).length(), c=box.getCenter(new THREE.Vector3())
+const ctl=new OrbitControls(cam,r.domElement); ctl.target.copy(c); cam.position.copy(c).add(new THREE.Vector3(size*.6,size*.45,size*.8)); ctl.autoRotate=true; ctl.update()
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();r.setSize(innerWidth,innerHeight)})
+r.setAnimationLoop(()=>{ctl.update();r.render(scene,cam)})
+</script></body></html>
+HTML
+    printf '{"kind":"model","width":0,"height":0,"fps":0,"frames":[],"viewer":"%s"}\n' "$out/viewer.html"
+    ;;
+  gif|webp|apng|mp4|mov|webm|mkv|avi|m4v)
+    nframes=$(ffprobe -v error -count_packets -select_streams v:0 -show_entries stream=nb_read_packets -of csv=p=0 "$src" 2>/dev/null | head -1 || echo 1)
+    if [[ ${nframes:-1} -le 1 ]]; then
+      magick "${src}[0]" -resize "${MAXW}x>" "$out/f-0001.png"; json_frames image 0
+    else
+      ffmpeg -v error -t $SECS -i "$src" -vf "fps=$FPS,scale='min($MAXW,iw)':-2" "$out/f-%04d.png"
+      json_frames anim $FPS
+    fi
+    ;;
+  *)
+    magick -background none "${src}[0]" -resize "${MAXW}x>" "$out/f-0001.png"; json_frames image 0
+    ;;
+esac

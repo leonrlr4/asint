@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# asint's "open externally": opens a file or URL with the system default application.
+# When the default is a terminal program (Terminal=true in its .desktop, e.g. yazi for Markdown), xdg-open runs it
+# without a terminal and it exits immediately, so it is launched with xdg-terminal-exec in a new terminal window instead.
+set -uo pipefail
+target=${1:?usage: asint-open <file or URL>}
+case $target in
+  http://* | https://* | file://*) exec xdg-open "$target" ;;
+esac
+mime=$(xdg-mime query filetype "$target" 2>/dev/null)
+desk=$(xdg-mime query default "$mime" 2>/dev/null)
+entry=
+for d in "$HOME/.local/share/applications" /usr/share/applications; do
+  [ -n "$desk" ] && [ -f "$d/$desk" ] && entry="$d/$desk" && break
+done
+if [ -n "$entry" ] && grep -q '^Terminal=true' "$entry"; then
+  # Take only the program from Exec, dropping field codes such as %f and %u; the path is appended here.
+  read -r -a cmd <<<"$(grep -m1 '^Exec=' "$entry" | cut -d= -f2- | sed -E 's/ ?%[fFuUdDnNickvm]//g')"
+  exec xdg-terminal-exec "${cmd[@]}" "$target"
+fi
+exec xdg-open "$target"
