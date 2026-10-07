@@ -18,8 +18,8 @@ export const FALLBACK: Palette = {
 }
 
 /**
- * Hacker mode: a fixed phosphor palette that ignores the theme. The terminal background cannot be changed, so panels and color blocks paint their own black (bg).
- * Phosphor green as the main color, amber as the accent, red only for errors; all three exceed 7:1 contrast on #050805.
+ * The phosphor colors: green as the main color, amber as the accent, red only for errors; all three exceed 7:1 contrast on #050805.
+ * Only the text colors are used: backgrounds always come from the theme (see `phosphor`).
  */
 export const HACKER: Palette = {
   bg: '#050805',
@@ -219,7 +219,15 @@ export const sourcesFor = (term: string): [string, Parser][] => {
   return [KITTY, GHOSTTY, FOOT, TOML]
 }
 
-export const paletteFor = (skin: Skin, theme: Palette) => (skin === 'hacker' ? HACKER : theme)
+/** Phosphor text colors over the theme's own backgrounds, so a block of color never shows a black the theme doesn't have. */
+export const phosphor = (theme: Palette): Palette => ({ ...HACKER, bg: theme.bg, surface: theme.surface })
+
+/**
+ * The chat column (messages, spinner, turn line, prompt bar) is phosphor under every theme; the dashboard follows the theme,
+ * or goes phosphor too with the hacker skin.
+ */
+export const paletteFor = (skin: Skin, theme: Palette) => (skin === 'hacker' ? phosphor(theme) : theme)
+export const chatPaletteFor = (theme: Palette) => phosphor(theme)
 
 export const formatDuration = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))

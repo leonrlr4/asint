@@ -9,7 +9,7 @@ import {
   applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
-import { FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
+import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
 import { type ArchNode, parseLikeC4 } from './arch'
 import { pngSize } from './image'
@@ -25,6 +25,8 @@ import { type ArchState, dashboard, treeRows, PANEL_KEY, PANEL_LABEL, panelArea,
 // ── Theme (sub-project D) ──────────────────────────────────────
 
 const palette = atom({ plugin: 'asint', key: 'palette' } as const, FALLBACK as Palette)
+// The chat column's colors: phosphor text over the theme's backgrounds, whatever the skin.
+const chatPalette = atom({ plugin: 'asint', key: 'chatPalette' } as const, chatPaletteFor(FALLBACK))
 const skin = atom({ plugin: 'asint', key: 'skin' } as const, 'omarchy' as Skin)
 const turnStartedAt = atom({ plugin: 'asint', key: 'turnStartedAt' } as const, 0)
 
@@ -55,6 +57,7 @@ async function loadTheme($: EngineInterface) {
 async function applySkin($: EngineInterface) {
   const s = await read($, skin)
   await update($, palette, () => paletteFor(s, themePalette))
+  await update($, chatPalette, () => chatPaletteFor(themePalette))
 }
 
 async function setSkin($: EngineInterface, next: Skin) {
@@ -903,7 +906,7 @@ export const register: Register = on => {
     await applySkin($)
     $.clock.every(THEME_POLL_MS, () => void loadTheme($))
     $.clock.every(TICK_MS, () => void tick($))
-    await $.command.register({ name: 'skin', description: t('切換 asint 配色：/skin [omarchy|hacker]，不帶參數就切到另一個', 'Switch the asint color scheme: /skin [omarchy|hacker]; with no argument, toggle') })
+    await $.command.register({ name: 'skin', description: t('儀表板配色：/skin hacker 磷光、/skin omarchy 跟主題；聊天欄一律磷光', 'Dashboard colors: /skin hacker for phosphor, /skin omarchy to follow the theme; the chat column is always phosphor') })
     // This Claude Code version has no TodoWrite/TaskCreate, so the agent can't make a checklist; asint provides one.
     // The agent decides when to use it; no rule is added.
     await $.tool.register({
@@ -957,7 +960,7 @@ export const register: Register = on => {
     const now = await read($, skin)
     const target: Skin = arg === 'hacker' || arg === 'omarchy' ? arg : now === 'hacker' ? 'omarchy' : 'hacker'
     await setSkin($, target)
-    return { text: target === 'hacker' ? t('駭客模式', 'Hacker mode') : t('跟著 Omarchy 主題', 'Following the Omarchy theme') }
+    return { text: target === 'hacker' ? t('儀表板也改成磷光配色', 'Dashboard in phosphor colors too') : t('儀表板跟著 Omarchy 主題', 'Dashboard follows the Omarchy theme') }
   })
 
   on('command.run', { command: 'asint' }, async ($, e) => {
@@ -1387,7 +1390,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
     const { Client } = $.ui.resolve(e)
-    const [p, s, startedAt, now] = await Promise.all([read($, palette), read($, skin), read($, turnStartedAt), $.clock.now()])
+    const [p, s, startedAt, now] = await Promise.all([read($, chatPalette), read($, skin), read($, turnStartedAt), $.clock.now()])
     const text = e.props.message ?? e.props.word
     const suffix = text.endsWith('…') ? '' : e.props.suffix
     return (
@@ -1403,7 +1406,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e)
     const { Box, Text } = $.ui.resolve(e)
-    const p = await read($, palette)
+    const p = await read($, chatPalette)
     const columns = e.viewport?.columns ?? 80
     const time = formatDuration(e.props.durationMs)
     const head = `[ OK ] ${e.props.word.toUpperCase()} T+${time} `
@@ -1423,7 +1426,7 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' || e.props.origin.kind !== 'composer') return next(e)
     const el = $.ui.resolve(e as typeof e & { surface: 'terminal' })
     const { Box, Text } = el
-    const p = await read($, palette)
+    const p = await read($, chatPalette)
     const list = (await Promise.all(imageTags(e.props.text).map(n => picture($, n)))).filter(x => x !== undefined)
     const { columns = 80, rows = 24 } = e.viewport ?? {}
     return (
@@ -1446,7 +1449,7 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' || e.props.hasSurvey) return below
     const el = $.ui.resolve(e as typeof e & { surface: 'terminal' })
     const { Box, Button } = el
-    const p = await read($, palette)
+    const p = await read($, chatPalette)
     const width = e.props.bodyColumns
     chatCols = width + 5
     const list = draft.map(n => pictures.get(n)).filter(x => x !== undefined)

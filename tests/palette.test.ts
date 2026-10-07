@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 
 import { FIXTURES } from './fixtures'
-import { contrast, fromFootIni, fromKitty, fromToml, HACKER, sourcesFor } from '../hooks/palette'
+import { chatPaletteFor, contrast, FALLBACK, fromFootIni, fromKitty, fromToml, HACKER, paletteFor, sourcesFor } from '../hooks/palette'
 import { pngSize } from '../hooks/image'
 
 const fixture = (name: string) => FIXTURES[name]!
@@ -49,4 +49,14 @@ test('pngSize reads width and height from the PNG header and returns undefined f
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
   expect(pngSize(png)).toEqual({ width: 1, height: 1 })
   expect(pngSize(btoa('GIF89a' + '\0'.repeat(30)))).toBeUndefined()
+})
+
+test('phosphor text sits on the theme background: the chat column always, the dashboard with the hacker skin', () => {
+  const theme = { ...FALLBACK, bg: '#1a1b26', surface: '#24283b' }
+  const chat = chatPaletteFor(theme)
+  expect(chat.hi).toBe(HACKER.hi)
+  expect([chat.bg, chat.surface]).toEqual([theme.bg, theme.surface])
+  expect(paletteFor('omarchy', theme)).toEqual(theme)
+  const hacker = paletteFor('hacker', theme)
+  expect([hacker.accent, hacker.bg]).toEqual([HACKER.accent, theme.bg])
 })

@@ -11,7 +11,7 @@ const memoryStore = (on: any) => {
 test('/skin toggles between the two palettes and remembers the choice', async ($, on) => {
   const kv = memoryStore(on)
   const first = await $.command.run({ command: 'skin', args: '' } as never)
-  expect(first.text).toBe('Hacker mode')
+  expect(first.text).toBe('Dashboard in phosphor colors too')
   expect(kv.get('skin')).toBe('hacker')
   const second = await $.command.run({ command: 'skin', args: '' } as never)
   expect(second.text).toContain('Omarchy')

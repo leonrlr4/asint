@@ -65,7 +65,7 @@ asint asks Claude to write plans and reports as Markdown in its reply rather tha
 
 ### Looks
 
-Colors follow the current [Omarchy](https://omarchy.org) theme and switch when you change it. `/skin hacker` switches to a phosphor-green look.
+The chat column (your messages, the spinner, the line that ends each turn, the prompt bar) uses phosphor green and amber text. The dashboard takes its colors from the current [Omarchy](https://omarchy.org) theme and switches when you change it; `/skin hacker` puts it in phosphor colors too. Backgrounds always come from the theme, so asint never paints a black your terminal doesn't have.
 
 ## Commands
 
@@ -76,7 +76,7 @@ Colors follow the current [Omarchy](https://omarchy.org) theme and switch when y
 | `/asint reset` | Restore the default layout |
 | `/asint arch` | Ask Claude to check or create the architecture diagram |
 | `/asint lang zh\|en\|auto` | Interface language; `auto` follows your system locale |
-| `/skin [omarchy\|hacker]` | Switch the color scheme |
+| `/skin [omarchy\|hacker]` | Dashboard colors: follow the theme, or phosphor |
 | `/html [-b] <path or url>` | Open a page in terminal-browser, or the system browser with `-b` |
 
 ## Requirements

@@ -11,12 +11,12 @@ test('/asint lang zh switches UI strings to Chinese, /asint lang en switches the
     const zh: any = await $.command.run({ command: 'asint', args: 'lang zh' } as never)
     expect(zh.text).toBe('介面語言已切換')
     expect(kv.get('lang')).toBe('zh')
-    expect(((await $.command.run({ command: 'skin', args: 'hacker' } as never)) as any).text).toBe('駭客模式')
+    expect(((await $.command.run({ command: 'skin', args: 'hacker' } as never)) as any).text).toBe('儀表板也改成磷光配色')
 
     const en: any = await $.command.run({ command: 'asint', args: 'lang en' } as never)
     expect(en.text).toBe('Interface language updated')
     expect(kv.get('lang')).toBe('en')
-    expect(((await $.command.run({ command: 'skin', args: 'hacker' } as never)) as any).text).toBe('Hacker mode')
+    expect(((await $.command.run({ command: 'skin', args: 'hacker' } as never)) as any).text).toBe('Dashboard in phosphor colors too')
   } finally {
     setLang('en')
   }

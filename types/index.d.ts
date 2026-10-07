@@ -26,6 +26,8 @@ declare module 'claude-code' {
       palette: Palette
       skin: Skin
       turnStartedAt: number
+      /** The chat column's palette: phosphor text over the theme's backgrounds. */
+      chatPalette: Palette
     }
   }
 }
