@@ -1,6 +1,6 @@
 // FILES follow mode: reads the file being edited and its content from tool arguments still streaming from the model (incomplete JSON). Pure functions.
 
-/** Tools that change files and are worth following. */
+/** Tools that change files and are worth following; FILES jumps to the file as soon as one of these names its path. */
 export const LIVE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 
 /** A file-changing call that is still streaming. new is the new content received so far (for Write, the whole content). */

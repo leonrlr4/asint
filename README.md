@@ -45,11 +45,9 @@ asint reads the model's tool calls while they stream. When Claude starts an Edit
 
 ### Talk to any agent
 
-![Agent radar](docs/screenshots/map.png)
+![Agent map](docs/screenshots/map.png)
 
 Click `[M]` or a subagent's `[n]` on the radar or the graph, type an instruction, press Enter. Messages to the main agent are queued like anything you type; messages to a subagent reach it at its next step, and a finished subagent is woken up with the message. **✉ All** sends one instruction to every running subagent. The board view lists agents in Running, Done and Failed columns.
-
-![Agent board](docs/screenshots/board.png)
 
 ### Architecture you can click
 
