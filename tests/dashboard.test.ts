@@ -212,3 +212,43 @@ test('MAP: agents on the relation graph are clickable too and open the same mess
   expect(await ui.find({ key: 'msg-input-ag1' })).toBeTruthy()
   expect(await ui.find({ key: 'spotg-main' })).toBeTruthy()
 })
+
+test('panel letters are hotkeys on the tab buttons, and zen keeps the keyboard on the pane', async ($, on) => {
+  const opens: any[] = []
+  host(on, { opens, closes: [] })
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  const ui: any = await $.ui.mount({ plugin: 'asint', surface: 'terminal', component: 'Pane', requestId: 'asint',
+    props: { title: 'ASINT', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 50 }, view: {} } } as never)
+  for (const [panel, key] of Object.entries({ todo: 't', exec: 'e', files: 'c', project: 'f', arch: 'a', map: 'm', media: 'i', log: 'l' })) {
+    const tab = await ui.find({ key: `ct-${panel}` })
+    if (tab) expect(tab.props.hotkey).toBe(key)
+  }
+  // Re-opening the pane to resize it without focus hands the keyboard back to the prompt, and the next letter lands there.
+  await ui.press({ key: 'zen-files' })
+  expect(opens.at(-1).focus).toBe(true)
+  await ui.press({ key: 'unzen' })
+  expect(opens.at(-1).focus).toBe(true)
+})
+
+test('while the pane holds the keys, the cell of the last panel used gets the heavy border', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  const focused: any = await $.ui.mount({ plugin: 'asint', surface: 'terminal', component: 'Pane', requestId: 'asint',
+    props: { title: 'ASINT', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 50 }, view: {} } } as never)
+  await focused.press({ key: 'ct-exec' })
+  const heavy = async (ui: any) => (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props?.borderStyle === 'bold')
+  const first = await heavy(focused)
+  expect(first.length).toBe(1)
+  // TODO sits in another cell of the default layout, so the heavy border moves with the key.
+  await focused.press({ key: 'ct-todo' })
+  const second = await heavy(focused)
+  expect(second.length).toBe(1)
+  expect(second[0].key ?? second[0].props.key).not.toBe(first[0].key ?? first[0].props.key)
+})
+
+test('without the keys, no cell gets the heavy border', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  const ui: any = await mount($)
+  expect((await ui.findAll({ type: 'Box' })).filter((b: any) => b.props?.borderStyle === 'bold').length).toBe(0)
+})

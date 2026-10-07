@@ -129,6 +129,8 @@ export type ViewCtx = {
   flash?: { path: string; from: number; to: number }
   /** CHANGES/FILES "open externally" and ARCH "full view" all want o. The most recently used one gets it; the others are mouse-only. */
   oOwner: Panel
+  /** The panel the keyboard is working in, while the pane holds the keys; its cell gets a heavy border. */
+  current?: Panel
 }
 
 /** State of one LikeC4 diagram. A failed export keeps the previous model; error holds likec4's message. */
@@ -1023,6 +1025,11 @@ function cellCard(c: ViewCtx, cell: Cell, k: number) {
   const innerW = Math.max(4, rect.w - 4)
   const innerH = Math.max(1, rect.h - 3)
   const lit = leaf.tabs.some(t => c.fresh.includes(t))
+  // The cell the keyboard works in draws a heavy border in the bright color, so it reads apart from a cell lit by new content.
+  const here = !!c.current && leaf.tabs[leaf.active ?? 0] === c.current
+  const frame = here
+    ? { borderStyle: 'bold' as const, borderColor: p.hi }
+    : { borderStyle: 'round' as const, borderColor: lit ? p.accent : mix(p.faint, p.accent, 0.25) }
   // STATUS is already a status row, so it skips the title row and gives that line to the hotkey legend.
   if (leaf.tabs.length === 1 && active === 'status') return (
     <Box key={`cell-${k}`} position="absolute" left={rect.x} top={rect.y} width={rect.w} height={rect.h}
@@ -1032,10 +1039,10 @@ function cellCard(c: ViewCtx, cell: Cell, k: number) {
   )
   return (
     <Box key={`cell-${k}`} position="absolute" left={rect.x} top={rect.y} width={rect.w} height={rect.h}
-      flexDirection="column" borderStyle="round" borderColor={lit ? p.accent : mix(p.faint, p.accent, 0.25)} paddingX={1} overflow="hidden">
+      flexDirection="column" {...frame} paddingX={1} overflow="hidden">
       <Box flexDirection="row" columnGap={1}>
         {leaf.tabs.map(t => (
-          <Button key={`ct-${t}`} plain dimColor={t !== active}
+          <Button key={`ct-${t}`} hotkey={PANEL_KEY[t]} plain dimColor={t !== active}
             label={`${t === active ? '▣' : '▢'} ${PANEL_LABEL[t]}${c.fresh.includes(t) && t !== active ? ' •' : ''}`}
             onPress={() => act.focusPanel(t)} />
         ))}

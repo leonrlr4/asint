@@ -703,13 +703,14 @@ async function restore($: EngineInterface) {
 }
 
 /** Entering zen asks the engine to widen the pane (a width the user dragged wins); leaving restores the previous width. */
+// Zen is always a press in the pane. Re-opening to resize without focus hands the keyboard back to the prompt, so the next shortcut letter would land there.
 async function toggleZen($: EngineInterface, t?: Panel) {
   if (ui.zen) {
     ui.zen = undefined
     const columns = preZenCols
     preZenCols = undefined
     requestedCols = columns
-    await $.ui.open({ id: PANE, title: 'ASINT', ...(columns ? { columns } : {}) }).catch(() => undefined)
+    await $.ui.open({ id: PANE, title: 'ASINT', focus: true, ...(columns ? { columns } : {}) }).catch(() => undefined)
   } else {
     const target = t ?? (lastPanel === 'status' ? 'files' : lastPanel)
     ui.zen = target
@@ -717,7 +718,7 @@ async function toggleZen($: EngineInterface, t?: Panel) {
     preZenCols = paneSize.w
     const columns = termCols() ? Math.max(paneSize.w, termCols() - ZEN_CHAT_COLS) : undefined
     requestedCols = columns
-    await $.ui.open({ id: PANE, title: `ASINT · ${PANEL_LABEL[target]}`, ...(columns ? { columns } : {}) }).catch(() => undefined)
+    await $.ui.open({ id: PANE, title: `ASINT · ${PANEL_LABEL[target]}`, focus: true, ...(columns ? { columns } : {}) }).catch(() => undefined)
   }
   $.ui.invalidate('ui.render')
 }
@@ -1364,7 +1365,7 @@ export const register: Register = on => {
     for (const t of PANELS) if (isShown(shown(), t)) fresh.delete(t)
 
     const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, treeText, treePreview, live, flash,
-      oOwner: oOwner() }
+      oOwner: oOwner(), current: paneFocused ? (ui.zen ?? (isShown(shown(), lastPanel) ? lastPanel : undefined)) : undefined }
     try {
       return dashboard(ctx, shown())
     } catch (err) {

@@ -37,7 +37,7 @@ One line above the prompt: the session's name, the git repository and branch (re
 | MEDIA | Images, GIFs, videos, 3D models and web pages the session produced |
 | LOG | Every other tool call, permission check and agent event |
 
-Drag the layout into any shape with `g`; each cell can stack several panels as tabs. `⛶` (or `z`) makes one panel fill the dashboard, and **▁ Minimize** folds the dashboard away and keeps the prompt bar.
+Click the dashboard (or open it with `/asint`) to give it the keyboard: the letters above switch panels, and the cell you are working in gets a heavy border in the bright color. Drag the layout into any shape with `g`; each cell can stack several panels as tabs. `⛶` (or `z`) makes one panel fill the dashboard, and **▁ Minimize** folds the dashboard away and keeps the prompt bar.
 
 ### Live edits
 
