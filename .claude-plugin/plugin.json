@@ -13,5 +13,6 @@
     "likec4",
     "architecture",
     "omarchy"
-  ]
+  ],
+  "types": "./types/index.d.ts"
 }
