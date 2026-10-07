@@ -97,12 +97,12 @@ const Editor: ClientModule<EditorProps, State> = (props, surface) => {
   const dropCell = drag?.kind === 'panel' ? cellAt(drag.x, drag.y) : undefined
   const zone = dropCell && drag?.kind === 'panel' ? zoneOf(dropCell.rect, drag.x, drag.y) : undefined
   for (const c of cells) {
-    const { x, y, w, h } = c.rect
+    const { x, y, w, h: tall } = c.rect
     const isDrop = dropCell === c
     const col = isDrop ? p.accent : p.muted
-    for (let i = 1; i < w - 1; i++) { put(x + i, y, '─', col); put(x + i, y + h - 1, '─', col) }
-    for (let j = 1; j < h - 1; j++) { put(x, y + j, '│', col); put(x + w - 1, y + j, '│', col) }
-    put(x, y, '╭', col); put(x + w - 1, y, '╮', col); put(x, y + h - 1, '╰', col); put(x + w - 1, y + h - 1, '╯', col)
+    for (let i = 1; i < w - 1; i++) { put(x + i, y, '─', col); put(x + i, y + tall - 1, '─', col) }
+    for (let j = 1; j < tall - 1; j++) { put(x, y + j, '│', col); put(x + w - 1, y + j, '│', col) }
+    put(x, y, '╭', col); put(x + w - 1, y, '╮', col); put(x, y + tall - 1, '╰', col); put(x + w - 1, y + tall - 1, '╯', col)
     let off = x + 2
     c.leaf.tabs.forEach((t, k) => {
       const label = `[${props.labels[t]}]`
@@ -110,12 +110,12 @@ const Editor: ClientModule<EditorProps, State> = (props, surface) => {
       ;[...label].forEach((ch, i) => put(off + i, y + 1, ch, drag?.kind === 'panel' && drag.panel === t ? p.accent : color))
       off += label.length + 1
     })
-    const size = `${w}×${h}`
-    ;[...size].forEach((ch, i) => put(x + w - 2 - size.length + i, y + h - 2, ch, p.faint))
+    const size = `${w}×${tall}`
+    ;[...size].forEach((ch, i) => put(x + w - 2 - size.length + i, y + tall - 2, ch, p.faint))
     if (isDrop && zone) {
       // The wireframe is a one-char-per-cell array and a two-cell CJK char would skew the row, so the hint is in English.
       const hint = zone === 'center' ? '[ drop: stack as tab ]' : `[ drop: split ${zone} ]`
-      const hy = y + Math.floor(h / 2)
+      const hy = y + Math.floor(tall / 2)
       ;[...hint].forEach((ch, i) => put(x + Math.max(2, Math.floor((w - hint.length) / 2)) + i, hy, ch, p.accent))
     }
   }

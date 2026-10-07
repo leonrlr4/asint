@@ -166,7 +166,7 @@ const tail = (s: string | undefined, n: number) => (s ?? '').replace(/\t/g, '  '
 /** The status row: model, context, quota, cost, turn timer. Shared by the STATUS card and the bar above the input box. */
 export function vitalsRow(c: Pick<ViewCtx, 'el' | 's' | 'p' | 'skin' | 'now'>) {
   const { el, s, p, skin, now } = c
-  const { Box, Text, Client } = el
+  const { Box, Text} = el
   const v = s.vitals
   const sep = <Text color={p.faint}> │ </Text>
   const gauge = (label: string, pct: number | undefined, n: number) =>
@@ -193,7 +193,7 @@ export function vitalsRow(c: Pick<ViewCtx, 'el' | 's' | 'p' | 'skin' | 'now'>) {
       {v.costUsd !== undefined ? <Text color={p.hi}>${v.costUsd.toFixed(2)}</Text> : null}
       {sep}
       {v.turnRunning && v.turnStartedAt
-        ? <Client key="turn" module="./shimmer.tsx" props={{ text: 'RUNNING', palette: p, skin, elapsedMs: now - v.turnStartedAt, width: 20, lang: getLang() }} />
+        ? <el.Client key="turn" module="./shimmer.tsx" props={{ text: 'RUNNING', palette: p, skin, elapsedMs: now - v.turnStartedAt, width: 20, lang: getLang() }} />
         : <Text color={p.muted}>IDLE</Text>}
     </Box>
   )
@@ -231,7 +231,7 @@ export function vitalsCompact(el: Elements['terminal'], p: Palette, v: Session['
 
 export function header(c: ViewCtx) {
   const { el, s, p, skin, now, width } = c
-  const { Box, Text, Client } = el
+  const { Box, Text} = el
   const todos = s.todos
   const done = todos.filter(t => t.status === 'completed').length
   const current = todos.find(t => t.status === 'in_progress')
@@ -245,7 +245,7 @@ export function header(c: ViewCtx) {
           <Text color={p.success}>{bar((done / todos.length) * 100, Math.min(12, todos.length))}</Text>
           <Text> </Text>
           {current
-            ? <Client key="todo-now" module="./shimmer.tsx" props={{ text: current.activeForm || current.content, palette: p, skin, elapsedMs: current.startedAt ? now - current.startedAt : 0, width: Math.max(20, width - 24), lang: getLang() }} />
+            ? <el.Client key="todo-now" module="./shimmer.tsx" props={{ text: current.activeForm || current.content, palette: p, skin, elapsedMs: current.startedAt ? now - current.startedAt : 0, width: Math.max(20, width - 24), lang: getLang() }} />
             : <Text color={p.muted}>{done === todos.length ? t('全部完成', 'All done') : t('等待下一項', 'Waiting for next item')}</Text>}
         </Box>
       ) : null}
@@ -359,7 +359,7 @@ export function filesTab(c: ViewCtx, maxRows: number) {
 
 const execRow = (c: ViewCtx, x: Exec, i: number) => {
   const { el, s, p, skin, ui, act, now, width } = c
-  const { Box, Text, Button, Client } = el
+  const { Box, Text, Button} = el
   const who = whoLabel(s, x.who)
   const sel = ui.selExec === x.id
   if (x.status === 'running' || x.status === 'background') {
@@ -367,7 +367,7 @@ const execRow = (c: ViewCtx, x: Exec, i: number) => {
       <Box key={`exec-${i}`} flexDirection="column">
         <Box flexDirection="row" backgroundColor={mix(p.bg, p.accent, 0.12)}>
           <Button key={`xsel-${i}`} plain label={sel ? '▸' : ' '} onPress={() => act.selExec(x.id)} />
-          <Client key={`run-${x.id}`} module="./shimmer.tsx"
+          <el.Client key={`run-${x.id}`} module="./shimmer.tsx"
             props={{ text: `$ ${x.command.split('\n')[0]}`, palette: p, skin, elapsedMs: now - x.startedAt, suffix: `${x.status === 'background' ? 'BG ' : ''}${who}`, width: width - 2, lang: getLang() }} />
         </Box>
         {x.status === 'background' && c.bgOutput.get(x.id)
@@ -587,13 +587,13 @@ function boardView(c: ViewCtx) {
 
 export function todoTab(c: ViewCtx, maxRows: number) {
   const { el, s, p, skin, now, width } = c
-  const { Box, Text, Client } = el
+  const { Box, Text} = el
   if (!s.todos.length) return <Text color={p.muted}>{t('這個 session 目前沒有 checklist；agent 開清單時會出現在這裡。', 'No checklist in this session. It appears here when the agent starts one.')}</Text>
   return (
     <Box flexDirection="column">
       {s.todos.slice(scrollAt(c, 'todo', s.todos.length - maxRows), scrollAt(c, 'todo', s.todos.length - maxRows) + maxRows).map((t, i) => {
         if (t.status === 'in_progress')
-          return <Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: t.content, palette: p, skin, elapsedMs: t.startedAt ? now - t.startedAt : 0, width, lang: getLang() }} />
+          return <el.Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: t.content, palette: p, skin, elapsedMs: t.startedAt ? now - t.startedAt : 0, width, lang: getLang() }} />
         const done = t.status === 'completed'
         const fresh = done && t.doneAt && now - t.doneAt < 3000
         return (
@@ -889,10 +889,10 @@ export function archTab(c: ViewCtx, rows: number) {
 // ── Media ─────────────────────────────────────────────────
 
 /** A character cell is about twice as tall as wide; compute the largest aspect-preserving box within columns×rows. */
-export const fit = (w: number, h: number, columns: number, rows: number) => {
+export const fit = (width: number, height: number, columns: number, rows: number) => {
   const clamp = (n: number) => Math.max(1, Math.min(255, Math.round(n)))
-  const across = Math.min(columns, (rows * 2 * w) / Math.max(1, h))
-  return { columns: clamp(across), rows: clamp((across * h) / Math.max(1, w) / 2) }
+  const across = Math.min(columns, (rows * 2 * width) / Math.max(1, height))
+  return { columns: clamp(across), rows: clamp((across * height) / Math.max(1, width) / 2) }
 }
 
 export function mediaTab(c: ViewCtx, maxRows: number) {

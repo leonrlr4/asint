@@ -35,7 +35,7 @@ One line above the prompt: the session's name, the git repository and branch (re
 | ARCH | The project's LikeC4 architecture diagram, clickable |
 | MAP | Radar, graph, heat map, combined and board views of agents and files |
 | MEDIA | Images, GIFs, videos, 3D models and web pages the session produced |
-| LOG | Every other tool call, permission check and agent event |
+| LOG | Every other tool call and agent event |
 
 Click the dashboard (or open it with `/asint`) to give it the keyboard: the letters above switch panels, and the cell you are working in gets a heavy border in the bright color. Drag the layout into any shape with `g`; each cell can stack several panels as tabs. `⛶` (or `z`) makes one panel fill the dashboard, and **▁ Minimize** folds the dashboard away and keeps the prompt bar.
 
@@ -78,6 +78,33 @@ The chat column (your messages, the spinner, the line that ends each turn, the p
 | `/asint lang zh\|en\|auto` | Interface language; `auto` follows your system locale |
 | `/skin [omarchy\|hacker]` | Dashboard colors: follow the theme, or phosphor |
 | `/html [-b] <path or url>` | Open a page in terminal-browser, or the system browser with `-b` |
+
+## What asint does on your machine
+
+asint has no server and sends nothing anywhere on its own. Everything below happens locally, and only in the places listed.
+
+**Programs it runs**, always by name with arguments it builds itself:
+
+| Program | When | Why |
+|---|---|---|
+| `git` | Each prompt, and when FILES scans | Repository root, branch, uncommitted count, the file list |
+| `find`, `grep`, `mkdir`, `id` | Scanning the project, new media, the session title | Listing files, reading the session title out of the transcript, cache folders, the temp folder name |
+| `likec4` (or `npx likec4@1.59.4`, which downloads it from npm the first time) | ARCH | `export json` to draw the diagram, `gen mermaid` for the Obsidian copies, `validate` |
+| `bin/asint-likec4-view` | `o` in ARCH | Starts `likec4 start` on 127.0.0.1 and opens it in your browser |
+| `bin/media-prep` (ImageMagick, ffmpeg) | MEDIA and file previews | Thumbnails and frames; a 3D model preview page loads three.js from cdn.jsdelivr.net when you open it |
+| `bin/asint-tb`, `bin/asint-open`, `xdg-terminal-exec nvim` | Opening a file or page | terminal-browser for web pages, the system default for other files, nvim for code |
+
+**Files it writes:** `~/.config/asint/layout.json` (the dashboard layout), `/tmp/asint-arch` and `/tmp/asint-media` (caches), `~/.cache/asint/last-error.log` (the last view error), and `views/*.md` next to a LikeC4 system map, which are Mermaid copies of its views.
+
+**Hooks and what they change:**
+- `prompt.compose` adds two rules to Claude's system prompt: keep deliverables in the reply as Markdown, and, when the project has a LikeC4 diagram, update it when a change alters the architecture.
+- `tool.call` records each tool call for the panels and passes it on unchanged, with two exceptions: it refuses to create Claude Docs documents (deliverables stay in the terminal), and it answers calls to its own `checklist` tool, which only updates TODO.
+- `agent.spawn` and `session.append` only record agents and background task results for MAP and EXEC.
+
+**Prompts it sends for you,** only when you press something:
+- **Plain** runs `/btw` with a fixed request to explain Claude's last reply simply.
+- **Arch diagram** and `/asint arch` submit a fixed request to check or create the project's LikeC4 diagram.
+- A message typed in the MAP box goes to the agent you clicked, exactly as you typed it.
 
 ## Requirements
 

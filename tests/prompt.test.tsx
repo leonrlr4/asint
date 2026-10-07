@@ -41,7 +41,7 @@ test('bar above the prompt: session name, repo, red protected branch, cwd, compa
   on('command.register', () => ({ value: undefined }))
   on('ui.render', ($: any, e: any) => { const { Box } = $.ui.resolve(e); return <Box /> })
   on('process.run', (_$: unknown, e: { argv: readonly string[] }) =>
-    e.argv[0] === 'sh' ? out('"customTitle":"asint prompt redesign"\n"aiTitle":"engine-generated title"\n') :
+    e.argv[0] === 'grep' ? out('"aiTitle":"older generated title"\n"customTitle":"asint prompt redesign"\n"aiTitle":"engine-generated title"\n') :
     e.argv.includes('--abbrev-ref') ? out('/home/u/Work/app\nmain\n') : e.argv.includes('--porcelain') ? out(' M a\n?? b\n') : out(''))
   await $.session.start({ source: 'startup', cwd: '/home/u/Work/app/src' } as never).catch(() => {})
   // refreshLocation and the title read run in the background; wait for them to finish.

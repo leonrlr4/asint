@@ -255,8 +255,8 @@ const likec4Label = () => (LIKEC4[0] === 'npx' ? 'npx likec4' : LIKEC4[0]!)
 async function resolveLikec4($: EngineInterface) {
   const env = await $.env.get('ASINT_LIKEC4')
   if (env) return void (LIKEC4 = [env])
-  const which = await $.process.run(['sh', '-c', 'command -v likec4'], { timeoutMs: 5_000 }).catch(() => undefined)
-  if (which?.exitCode === 0 && which.stdout.trim()) return void (LIKEC4 = [which.stdout.trim()])
+  const onPath = await $.process.run(['likec4', '--version'], { timeoutMs: 10_000 }).catch(() => undefined)
+  if (onPath?.exitCode === 0) return void (LIKEC4 = ['likec4'])
   const local = `${await $.env.get('HOME')}/.local/share/likec4/node_modules/.bin/likec4`
   if (await $.fs.exists(local).catch(() => false)) LIKEC4 = [local]
 }
@@ -452,9 +452,10 @@ async function findTranscript($: EngineInterface) {
 async function refreshTitle($: EngineInterface) {
   const path = await findTranscript($)
   if (!path) return
-  // The transcript can be several MB, so let grep do it; take the last entry of each title kind, custom first.
-  const r = await $.process.run(['sh', '-c', `grep -o '"customTitle":"[^"]*"' "$1" | tail -1; grep -o '"aiTitle":"[^"]*"' "$1" | tail -1`, 'sh', path], { timeoutMs: 5_000 }).catch(() => undefined)
-  const line = r?.stdout.split('\n').find(Boolean)
+  // The transcript can be several MB, so let grep pick out the title entries; the last custom title wins over the last generated one.
+  const r = await $.process.run(['grep', '-o', '-E', '"(customTitle|aiTitle)":"[^"]*"', path], { timeoutMs: 5_000 }).catch(() => undefined)
+  const lines = r?.stdout.split('\n').filter(Boolean) ?? []
+  const line = lines.findLast(l => l.startsWith('"customTitle"')) ?? lines.findLast(l => l.startsWith('"aiTitle"'))
   let next: string | undefined
   try {
     next = line ? Object.values(JSON.parse(`{${line}}`) as Record<string, string>)[0] : undefined
@@ -1169,11 +1170,6 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('tool.check', async ($, e, next) => {
-    const r = await next(e)
-    if (r.decision !== 'allow') log(S, { at: await $.clock.now(), who: e.agentId ?? 'main', kind: 'check', text: `${r.decision.toUpperCase()} ${e.tool}${r.reason ? t(`：${r.reason}`, `: ${r.reason}`) : ''}` })
-    return r
-  }).catch(($, e, next) => next(e))
 
   // Every tool call: Bash goes to Exec, file tools to Files, checklist tools to Todo, the rest to Log; afterwards look for new media.
   on('tool.call', async ($, e, next) => {
@@ -1339,7 +1335,7 @@ export const register: Register = on => {
     // Don't wait for the next tick the first time ARCH is shown.
     if (!arch && isShown(shown(), 'arch')) void refreshArch($)
     if (editing) {
-      const { Box, Button, Text, Client } = el
+      const { Box, Button, Text } = el
       const labels = Object.fromEntries(PANELS.map(t => [t, t === 'status' ? 'STATUS' : PANEL_LABEL[t]]))
       return (
         <Box flexDirection="column">
@@ -1351,7 +1347,7 @@ export const register: Register = on => {
             <Button key="layout-done" hotkey="g" label={t('完成', 'Done')} onPress={() => { editing = false; $.ui.invalidate('ui.render') }} />
           </Box>
           {/* A Client's props may not hold undefined anywhere (the engine refuses the whole pane), so the layout goes through JSON. */}
-          <Client key={`editor-${layoutText.length}`} module="./editor.tsx"
+          <el.Client key={`editor-${layoutText.length}`} module="./editor.tsx"
             props={{ layout: JSON.parse(JSON.stringify(layout)) as never, width, height: rows - 1, palette: p, labels, lang: getLang() } as never} />
         </Box>
       )
@@ -1389,12 +1385,12 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
-    const { Client } = $.ui.resolve(e)
+    const el = $.ui.resolve(e)
     const [p, s, startedAt, now] = await Promise.all([read($, chatPalette), read($, skin), read($, turnStartedAt), $.clock.now()])
     const text = e.props.message ?? e.props.word
     const suffix = text.endsWith('…') ? '' : e.props.suffix
     return (
-      <Client
+      <el.Client
         key="spinner"
         module="./spinner.tsx"
         props={{ text: text + suffix, mode: e.props.mode, palette: p, skin: s, elapsedMs: startedAt ? now - startedAt : 0, lang: getLang() }}
