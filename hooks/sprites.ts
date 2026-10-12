@@ -189,21 +189,27 @@ export function renderSprite(role: Role, mood: Mood, frame: number): Cell[][] {
   return rows
 }
 
-/** Which creature a subagent type gets. */
+/**
+ * Which creature a subagent type gets. The name is cut into words ("code-reviewer" is "code" and "reviewer") and matched word by word,
+ * so "docker" is not about docs, "linux" is not about UX and "credit" is not about editing. The first rule that matches decides.
+ */
 export function roleOf(type: string | undefined): Role {
-  const t = (type ?? '').toLowerCase()
-  if (t === 'main') return 'main'
-  if (t.includes('explore')) return 'explore'
-  if (t.includes('guide')) return 'guide'
-  if (t.includes('plan') || t.includes('architect')) return 'plan'
-  if (/review|critic|audit|lint/.test(t)) return 'reviewer'
-  if (/test|qa|verif|check/.test(t)) return 'tester'
-  if (/design|\bui\b|ux|style/.test(t)) return 'designer'
-  if (/secur|safety|threat/.test(t)) return 'security'
-  if (/doc|writ|summar|draft|edit/.test(t)) return 'writer'
-  if (/research|analy|bio|science|data/.test(t)) return 'scholar'
-  if (/dev|implement|engineer|build|code|fix|setup|config/.test(t)) return 'developer'
-  if (t.includes('general')) return 'general'
+  const words = (type ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  const starts = (...pre: string[]) => words.some(w => pre.some(p => w.startsWith(p)))
+  const exact = (...ws: string[]) => words.some(w => ws.includes(w))
+  if (exact('main')) return 'main'
+  if (starts('explore')) return 'explore'
+  if (words.at(-1) === 'guide') return 'guide'
+  if (starts('secur', 'safety', 'threat')) return 'security'
+  if (starts('plan', 'architect')) return 'plan'
+  if (starts('review', 'critic', 'audit', 'lint')) return 'reviewer'
+  if (starts('test', 'verif', 'check') || exact('qa')) return 'tester'
+  if (exact('api')) return 'developer'
+  if (starts('design', 'style') || exact('ui', 'ux')) return 'designer'
+  if (starts('document', 'writ', 'summar', 'draft', 'edit', 'copy') || exact('doc', 'docs')) return 'writer'
+  if (starts('research', 'analy', 'bio', 'scien', 'statist')) return 'scholar'
+  if (starts('dev', 'implement', 'engineer', 'build', 'code', 'fix', 'setup', 'config', 'debug', 'refactor', 'migrat', 'optimi', 'perf')) return 'developer'
+  if (starts('general')) return 'general'
   return 'other'
 }
 
