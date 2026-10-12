@@ -3,8 +3,8 @@
 
 // files is the files this session touched (shown as CHANGES); project is the whole project's file tree (shown as FILES).
 // The ids are not renamed so old layout.json files still load.
-export type Panel = 'status' | 'todo' | 'exec' | 'files' | 'project' | 'arch' | 'map' | 'media' | 'log'
-export const PANELS: Panel[] = ['status', 'todo', 'exec', 'files', 'project', 'arch', 'map', 'media', 'log']
+export type Panel = 'status' | 'todo' | 'exec' | 'files' | 'project' | 'arch' | 'map' | 'orch' | 'media' | 'log'
+export const PANELS: Panel[] = ['status', 'todo', 'exec', 'files', 'project', 'arch', 'map', 'orch', 'media', 'log']
 
 /** Leaf: one cell can stack several panels (as tabs); active is the one shown. */
 export type Leaf = { tabs: Panel[]; active?: number }
@@ -29,7 +29,7 @@ export const DEFAULT_LAYOUT: LayoutNode = {
       sizes: [0.35, 0.65],
       children: [
         { split: 'col', sizes: [0.3, 0.35, 0.35], children: [{ tabs: ['todo'] }, { tabs: ['exec'] }, { tabs: ['files', 'project'], active: 0 }] },
-        { split: 'col', sizes: [0.65, 0.35], children: [{ tabs: ['arch', 'map'], active: 0 }, { tabs: ['media', 'log'], active: 0 }] },
+        { split: 'col', sizes: [0.65, 0.35], children: [{ tabs: ['arch', 'map', 'orch'], active: 0 }, { tabs: ['media', 'log'], active: 0 }] },
       ],
     },
   ],

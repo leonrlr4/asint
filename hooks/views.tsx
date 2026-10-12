@@ -9,6 +9,7 @@ import { agentSpots, agentsOf, type MapView } from './map'
 
 import { type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
 import { mix } from './palette'
+import { renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from './sprites'
 import { badgeOf, hotDirs, hotFilesOf, statusOf, type GitState, type StatusKind, type Tone } from './tree'
 import { getLang, t } from './i18n'
 
@@ -39,6 +40,8 @@ export type UiState = {
   /** The TODO item whose steps are shown, and the step (an Exec id) opened inline under it. */
   selTodo?: string
   selStep?: string
+  /** The ORCH card opened to show what that agent did lately. */
+  selAgent?: string
   mediaFilter: 'ALL' | MediaKind
   selMedia?: string
   /** Scroll position per card (or per detail area `<panel>:detail`). The wheel scrolls the card, not the whole pane. */
@@ -99,6 +102,7 @@ export type Actions = {
   archOpen: () => void
   mapView: (v: UiState['mapView']) => void
   selTodo: (key: string) => void
+  selAgent: (id: string) => void
   selStep: (id: string) => void
   /** Jump to the EXEC card with this command selected. */
   gotoExec: (id: string) => void
@@ -1169,6 +1173,90 @@ export function logTab(c: ViewCtx, maxRows: number) {
   )
 }
 
+// ── Orch: every agent as a small worker with its task ─────────────────────
+
+const orchCount = (s: Session) => {
+  const running = [...s.agents.values()].filter(a => a.status === 'running').length
+  return running ? t(`${running} 個在跑`, `${running} running`) : s.agents.size ? String(s.agents.size) : ''
+}
+
+/**
+ * ORCH: MAIN and each subagent as a card with a pixel worker (a hat and a tool for its kind), what it was asked to do, how long
+ * it has run and what it is doing now. Running first, then the finished by how recently they ended. A card opens on click to
+ * show its latest steps and a button to send it a message.
+ */
+function orchTab(c: ViewCtx, maxRows: number) {
+  const { el, s, p, ui, act, now, width } = c
+  const { Box, Text, Button } = el
+  const subs = [...s.agents.values()]
+  const running = subs.filter(a => a.status === 'running').length
+  const failed = subs.filter(a => a.status === 'error').length
+  const done = subs.length - running - failed
+  const frame = Math.floor(now / 300)
+  const filesOf = (id: string) => [...s.files.values()].filter(f => f.by.includes(id)).length
+  const stepsOf = (id: string) => [...s.log].reverse().filter(e => e.who === id && e.kind !== 'turn').slice(0, 6)
+  const order = [...subs].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || (b.endedAt ?? now) - (a.endedAt ?? now))
+  type Card = { id: string; type: string; label: string; status: 'running' | 'done' | 'error' | 'idle'; startedAt?: number; endedAt?: number; doing?: string; model?: string }
+  const main: Card = {
+    id: 'main', type: 'main', label: t('主 agent', 'Main agent'), status: s.vitals.turnRunning ? 'running' : 'idle',
+    startedAt: s.vitals.turnStartedAt, doing: [...s.log].reverse().find(e => e.who === 'main' && e.kind !== 'agent' && e.kind !== 'turn')?.text, model: s.vitals.model,
+  }
+  const cards: Card[] = [main, ...order.map(a => ({ id: a.id, type: a.type, label: a.label, status: a.status, startedAt: a.startedAt, endedAt: a.endedAt, doing: a.doing }))]
+  const statusText = (x: Card['status']) => (x === 'running' ? t('執行中', 'Running') : x === 'done' ? t('完成', 'Done') : x === 'error' ? t('失敗', 'Failed') : t('閒置', 'Idle'))
+  const statusColor = (x: Card['status']) => (x === 'running' ? p.success : x === 'error' ? p.error : x === 'done' ? p.muted : p.faint)
+  const infoW = Math.max(16, width - SPRITE_COLS - 3)
+  const cardRows = SPRITE_ROWS + 2
+  const visible = Math.max(1, Math.floor((maxRows - 2) / (cardRows + 1)))
+  const start = scrollAt(c, 'orch', cards.length - visible)
+  const sprite = (x: Card) => {
+    const mood = x.status === 'running' ? 'working' : x.status === 'error' ? 'failed' : x.status === 'done' ? 'done' : 'idle'
+    return renderSprite(roleOf(x.type), mood, frame).map((row, i) => (
+      <Text key={`sp-${x.id}-${i}`}>{runsOf(row).map((r, j) => <Text key={j} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
+    ))
+  }
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" columnGap={2}>
+        <Text color={p.success} bold>{t('執行中', 'Running')} {running}</Text>
+        <Text color={p.muted}>{t('完成', 'Done')} {done}</Text>
+        <Text color={failed ? p.error : p.faint}>{t('失敗', 'Failed')} {failed}</Text>
+      </Box>
+      {cards.slice(start, start + visible).map(x => {
+        const open = ui.selAgent === x.id
+        const end = x.endedAt ?? now
+        const spin = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame % 10]
+        return (
+          <Box key={`oc-${x.id}`} flexDirection="column" marginTop={1}>
+            <Box flexDirection="row" columnGap={2}>
+              <Box width={SPRITE_COLS} flexShrink={0} flexDirection="column">{sprite(x)}</Box>
+              <Box flexDirection="column" width={infoW}>
+                <Box flexDirection="row" columnGap={1}>
+                  <Button key={`oc-t-${x.id}`} plain label={x.type === 'main' ? 'MAIN' : x.type} onPress={() => act.selAgent(x.id)} />
+                  <Text color={statusColor(x.status)} bold>{x.status === 'running' ? `${spin} ` : x.status === 'done' ? '✓ ' : x.status === 'error' ? '✗ ' : ''}{statusText(x.status)}</Text>
+                  {x.startedAt ? <Text color={p.muted}>{fmtDur((x.status === 'running' ? now : end) - x.startedAt)}</Text> : null}
+                </Box>
+                <Text color={p.base} wrap="truncate-end">{x.label}</Text>
+                <Text color={p.faint} wrap="truncate-end">
+                  {[x.model, x.id === 'main' ? undefined : t(`${filesOf(x.id)} 檔`, `${filesOf(x.id)} files`)].filter(Boolean).join(' · ')}
+                </Text>
+                {x.status === 'running' && x.doing ? <Text color={p.accent} wrap="truncate-end">⏵ {x.doing}</Text> : <Text color={p.faint}>{' '}</Text>}
+              </Box>
+            </Box>
+            {open ? (
+              <Box flexDirection="column" paddingLeft={SPRITE_COLS + 2}>
+                {stepsOf(x.id).length ? stepsOf(x.id).map((e, i) => <Text key={`os-${i}`} color={e.kind === 'error' ? p.error : p.muted} wrap="truncate-end">{fmtClock(e.at)} {e.text}</Text>)
+                  : <Text color={p.faint}>{t('還沒有紀錄。', 'Nothing recorded yet.')}</Text>}
+                <Button key={`oc-m-${x.id}`} plain dimColor label={t('✉ 傳訊息給它', '✉ Message it')} onPress={() => act.openMsg(x.id)} />
+              </Box>
+            ) : null}
+          </Box>
+        )
+      })}
+      {cards.length > visible ? <Text color={p.faint}>{pos(start, visible, cards.length).trim()} · {t('滾輪捲動', 'scroll to see more')}</Text> : null}
+    </Box>
+  )
+}
+
 // ── Composition ───────────────────────────────────────────
 
 export function body(c: ViewCtx, tab: Tab, maxRows: number) {
@@ -1184,15 +1272,15 @@ export function body(c: ViewCtx, tab: Tab, maxRows: number) {
 // ── Dashboard: render each cell of the layout tree (layout.ts) as a card ──
 
 export const PANEL_LABEL: Record<Panel, string> = {
-  status: 'STATUS', todo: 'TODO', exec: 'EXEC', files: 'CHANGES', project: 'FILES', arch: 'ARCH', map: 'MAP', media: 'MEDIA', log: 'LOG',
+  status: 'STATUS', todo: 'TODO', exec: 'EXEC', files: 'CHANGES', project: 'FILES', arch: 'ARCH', map: 'MAP', orch: 'ORCH', media: 'MEDIA', log: 'LOG',
 }
-export const PANEL_KEY: Partial<Record<Panel, string>> = { todo: 't', exec: 'e', files: 'c', project: 'f', arch: 'a', map: 'm', media: 'i', log: 'l' }
+export const PANEL_KEY: Partial<Record<Panel, string>> = { todo: 't', exec: 'e', files: 'c', project: 'f', arch: 'a', map: 'm', orch: 'p', media: 'i', log: 'l' }
 
 const panelCount = (s: Session, panel: Panel) =>
   panel === 'todo' ? (s.todos.length ? `${s.todos.filter(x => x.status === 'completed').length}/${s.todos.length}` : '')
     : panel === 'exec' ? (s.execs.length ? t(`${s.execs.filter(x => x.status === 'running' || x.status === 'background').length} 跑 · ${s.execs.length}`, `${s.execs.filter(x => x.status === 'running' || x.status === 'background').length} running · ${s.execs.length}`) : '')
       : panel === 'files' ? (s.files.size ? String(s.files.size) : '') : panel === 'project' ? '' : panel === 'media' ? (s.media.length ? String(s.media.length) : '')
-        : panel === 'log' ? (s.log.length ? String(s.log.length) : '') : ''
+        : panel === 'log' ? (s.log.length ? String(s.log.length) : '') : panel === 'orch' ? orchCount(s) : ''
 
 /** Card contents; width and height already exclude border, padding and title row. */
 function panelBody(c: ViewCtx, panel: Panel, rows: number) {
@@ -1200,6 +1288,7 @@ function panelBody(c: ViewCtx, panel: Panel, rows: number) {
   if (panel === 'status') return statusBody(c)
   if (panel === 'arch') return archTab(c, rows)
   if (panel === 'project') return projectTab(c, rows)
+  if (panel === 'orch') return orchTab(c, rows)
   return body(c, panel, rows)
 }
 

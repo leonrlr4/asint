@@ -90,7 +90,7 @@ test('default layout: status row is fixed at 4 rows, cells tile the area exactly
   const { cells } = compute(DEFAULT_LAYOUT, { x: 0, y: 0, w: 120, h: 60 })
   expect(cells.find(c => c.leaf.tabs.includes('status'))!.rect.h).toBe(4)
   expect(cells.reduce((n, c) => n + c.rect.w * c.rect.h, 0)).toBe(120 * 60)
-  expect(cells.map(c => c.leaf.tabs.join('+')).sort()).toEqual(['arch+map', 'exec', 'files+project', 'media+log', 'status', 'todo'])
+  expect(cells.map(c => c.leaf.tabs.join('+')).sort()).toEqual(['arch+map+orch', 'exec', 'files+project', 'media+log', 'status', 'todo'])
 })
 
 test('dragging a title: moving LOG to the right of TODO splits it, moving it to the center stacks it as a tab', () => {
@@ -151,7 +151,7 @@ test('minimize: closes the pane and remembers; the next session does not open it
 test('an old layout.json without FILES (project): it gets stacked into the CHANGES cell', () => {
   const old = { split: 'row', sizes: [0.5, 0.5], children: [{ tabs: ['status', 'todo'] }, { tabs: ['exec', 'files', 'arch', 'map', 'media', 'log'] }] }
   const node = parseLayout(JSON.stringify(old)) as any
-  expect(node.children[1].tabs).toEqual(['exec', 'files', 'arch', 'map', 'media', 'log', 'project'])
+  expect(node.children[1].tabs).toEqual(['exec', 'files', 'arch', 'map', 'media', 'log', 'project', 'orch'])
 })
 
 test('MAP: clicking an agent on the radar opens a small window, and the submitted message goes through session.send', async ($, on) => {
@@ -504,4 +504,33 @@ test('vim keys in the FILES tree: j and k move the cursor, l opens a folder or g
   expect(await cursor()).toBe('api')
   await ui.press({ key: 'h-project' })
   expect(await names()).toEqual(['src', 'api', 'c.ts', 'README.md'])
+})
+
+import { renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from '../hooks/sprites'
+
+test('workers: every role draws the same size, a working one moves and a failed one looks different', () => {
+  for (const role of ['main', 'explore', 'plan', 'general', 'guide', 'other'] as const) {
+    const rows = renderSprite(role, 'working', 0)
+    expect(rows.length).toBe(SPRITE_ROWS)
+    for (const row of rows) expect(row.length).toBe(SPRITE_COLS)
+  }
+  const still = JSON.stringify(renderSprite('explore', 'working', 0))
+  expect(JSON.stringify(renderSprite('explore', 'working', 1))).not.toBe(still)
+  expect(JSON.stringify(renderSprite('explore', 'failed', 0))).not.toBe(JSON.stringify(renderSprite('explore', 'idle', 0)))
+  expect(JSON.stringify(renderSprite('plan', 'idle', 0))).not.toBe(JSON.stringify(renderSprite('general', 'idle', 0)))
+  expect(roleOf('Explore')).toBe('explore')
+  expect(roleOf('claude-code-guide')).toBe('guide')
+  expect(roleOf('statusline-setup')).toBe('other')
+  expect(runsOf(renderSprite('other', 'idle', 0)[0]!).map(r => r.ch).join('').length).toBe(SPRITE_COLS)
+})
+
+test('ORCH: MAIN and each subagent get a card; running ones are counted and come first', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await $.agent.spawn({ subagentType: 'Explore', name: 'research', description: 'look around', parentAgentId: undefined } as never).catch(() => undefined)
+  const ui: any = await mount($)
+  await ui.press({ key: 'ct-orch' })
+  const all = await texts(ui)
+  expect(all).toContain('MAIN')
+  expect(all).toContain('Running')
 })

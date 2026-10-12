@@ -151,6 +151,7 @@ async function refreshUsage($: EngineInterface) {
 
 const mapVisible = () => paneOpen && !editing && isShown(shown(), 'map')
 const mediaVisible = () => paneOpen && !editing && isShown(shown(), 'media')
+const orchVisible = () => paneOpen && !editing && isShown(shown(), 'orch')
 
 /** Cells in the new layout whose tab set exactly matches a cell in the old one keep the old active tab. */
 function keepActive(next: LayoutNode, prev: LayoutNode): LayoutNode {
@@ -186,7 +187,7 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 const SESSIONS_DIR = '.cache/asint/sessions'
 const SAVE_DAYS = 14
 /** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'treeSel', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'treeSel', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -280,6 +281,8 @@ async function tick($: EngineInterface) {
     }
   }
   if (ticks % 20 === 0 && !editing && (await loadLayout($))) $.ui.invalidate('ui.render')
+  // The ORCH workers move while anything runs: redraw about three times a second, and once a second at rest for the timers.
+  if (orchVisible() && (isActive(now) ? ticks % 3 === 0 : ticks % 10 === 0)) $.ui.invalidate('ui.render')
   if (ticks % 50 === 25) void refreshLocation($)
   if (ticks % 50 === 10) void persist($)
   if (ticks % 40 === 15 && paneOpen && isShown(shown(), 'project')) void refreshGit($)
@@ -1051,6 +1054,7 @@ function makeActions($: EngineInterface): Actions {
     openExternal: path => void openFile($, path),
     openUrl: url => void openDefault($, url),
     selExec: id => { ui.selExec = ui.selExec === id ? undefined : id; redraw() },
+    selAgent: id => { lastPanel = 'orch'; ui.selAgent = ui.selAgent === id ? undefined : id; redraw() },
     selTodo: key => { lastPanel = 'todo'; ui.selTodo = key; ui.selStep = undefined; ui.scroll['todo:detail'] = 0; redraw() },
     selStep: id => { ui.selStep = ui.selStep === id ? undefined : id; redraw() },
     gotoExec: id => { ui.selExec = id; act.focusPanel('exec') },
