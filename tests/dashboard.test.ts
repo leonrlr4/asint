@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '../hooks/views'
 import { badgeOf, hotDirs, hotFilesOf, isHot, parseGit, statusOf } from '../hooks/tree'
-import { emptySession, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
+import { changesList, emptySession, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
 
 const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -582,4 +582,37 @@ test('a reply is drawn by the reply client with a diamond on its first block onl
   const reply = await first.find({ key: 'reply' })
   expect(reply.props.props.text).toBe('# Title\n\nbody')
   expect(await texts(first)).toContain('◆')
+})
+
+test('CHANGES list: newest first, reads hidden on request, and only one agent\'s files when picked', () => {
+  const s = emptySession()
+  const f = (path: string, op: 'R' | 'M' | 'A', lastAt: number, by: string[]) => ({ path, op, count: 1, lastAt, lastOp: op, by, diff: [] })
+  s.files.set('/w/a.ts', f('/w/a.ts', 'M', 3, ['main']))
+  s.files.set('/w/b.ts', f('/w/b.ts', 'R', 5, ['a1']))
+  s.files.set('/w/c.ts', f('/w/c.ts', 'A', 4, ['a1', 'main']))
+  expect(changesList(s, { showReads: true }).map(x => x.path)).toEqual(['/w/b.ts', '/w/c.ts', '/w/a.ts'])
+  expect(changesList(s, { showReads: false }).map(x => x.path)).toEqual(['/w/c.ts', '/w/a.ts'])
+  expect(changesList(s, { showReads: true, by: 'a1' }).map(x => x.path)).toEqual(['/w/b.ts', '/w/c.ts'])
+  expect(changesList(s, { showReads: true, by: 'nobody' })).toEqual([])
+})
+
+test('opening an ORCH card narrows CHANGES to that agent and closing it lifts the filter', async ($, on) => {
+  const saved = emptySession()
+  saved.agents.set('a1', { id: 'a1', label: 'job', type: 'Explore', startedAt: 1000, endedAt: 2000, status: 'done' })
+  saved.files.set('/w/mine.ts', { path: '/w/mine.ts', op: 'M', count: 1, lastAt: 1500, lastOp: 'M', by: ['a1'], diff: ['+x'] })
+  saved.files.set('/w/other.ts', { path: '/w/other.ts', op: 'M', count: 1, lastAt: 1800, lastOp: 'M', by: ['main'], diff: ['+y'] })
+  host(on, { opens: [], closes: [], fileText: JSON.stringify({ ...saveSession(saved), view: {} }) })
+  await $.session.start({ source: 'resume', cwd: '/w' } as never).catch(() => {})
+  const ui: any = await mount($)
+  await ui.press({ key: 'ct-orch' })
+  await ui.press({ key: 'zen-orch' })
+  await ui.press({ key: 'op-t-a1' })
+  await ui.press({ key: 'unzen' })
+  await ui.press({ key: 'ct-files' })
+  const open = await texts(ui)
+  expect(open).toContain('mine.ts')
+  expect(open).not.toContain('other.ts')
+  expect(await ui.find({ key: 'by' })).toBeTruthy()
+  await ui.press({ key: 'by' })
+  expect(await texts(ui)).toContain('other.ts')
 })

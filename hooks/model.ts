@@ -294,3 +294,10 @@ export function reviveSession(text: string | undefined): Session | undefined {
     return undefined
   }
 }
+
+/** The files the CHANGES card lists, newest first: reads are hidden on request and, when an agent is picked, only that agent's files. */
+export function changesList(s: Session, opts: { showReads: boolean; by?: string }): FileEntry[] {
+  return [...s.files.values()]
+    .filter(f => (opts.showReads || f.op !== 'R') && (!opts.by || f.by.includes(opts.by)))
+    .sort((a, b) => b.lastAt - a.lastAt)
+}

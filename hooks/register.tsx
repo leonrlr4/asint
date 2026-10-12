@@ -6,7 +6,7 @@ import type { Palette, Skin } from '../types'
 import { Canvas } from './canvas'
 import { draw } from './map'
 import {
-  applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
+  applyTaskCreate, applyTaskUpdate, applyTodoWrite, changesList, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
 import { briefTool } from './brief'
@@ -188,7 +188,7 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 const SESSIONS_DIR = '.cache/asint/sessions'
 const SAVE_DAYS = 14
 /** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'treeSel', 'treeRoot', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'filesBy', 'treeSel', 'treeRoot', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -736,7 +736,7 @@ function filesVim(key: 'h' | 'j' | 'k' | 'l') {
     else if (key === 'j' || key === 'k') act.vpan('files:detail', key === 'j' ? 3 : -3)
     return
   }
-  const list = [...S.files.values()].filter(f => ui.showReads || f.op !== 'R').sort((a, b) => b.lastAt - a.lastAt)
+  const list = changesList(S, { showReads: ui.showReads, by: ui.filesBy })
   if (!list.length) return
   const idx = Math.max(0, list.findIndex(f => f.path === ui.selFile))
   if (key === 'j' || key === 'k') {
@@ -1078,7 +1078,18 @@ function makeActions($: EngineInterface): Actions {
     openExternal: path => void openFile($, path),
     openUrl: url => void openDefault($, url),
     selExec: id => { ui.selExec = ui.selExec === id ? undefined : id; redraw() },
-    selAgent: id => { lastPanel = 'orch'; ui.selAgent = ui.selAgent === id ? undefined : id; redraw() },
+    // Opening a card also narrows CHANGES to that agent's files and selects the newest of them; closing it lifts the filter.
+    selAgent: id => {
+      lastPanel = 'orch'
+      ui.selAgent = ui.selAgent === id ? undefined : id
+      ui.filesBy = ui.selAgent
+      if (ui.selAgent) {
+        const newest = changesList(S, { showReads: ui.showReads, by: ui.selAgent })[0]
+        if (newest) { ui.selFile = newest.path; ui.fullFile = false; ui.hx['files:detail'] = 0; ui.scroll['files:detail'] = 0 }
+      }
+      redraw()
+    },
+    clearFilesBy: () => { ui.filesBy = undefined; redraw() },
     selTodo: key => { lastPanel = 'todo'; ui.selTodo = key; ui.selStep = undefined; ui.scroll['todo:detail'] = 0; redraw() },
     selStep: id => { ui.selStep = ui.selStep === id ? undefined : id; redraw() },
     gotoExec: id => { ui.selExec = id; act.focusPanel('exec') },
@@ -1531,7 +1542,7 @@ export const register: Register = on => {
     let fileText: string | undefined
     let filePreview: ViewCtx['filePreview']
     if (isShown(shown(), 'files')) {
-      const list = [...S.files.values()].filter(f => ui.showReads || f.op !== 'R').sort((a, b) => b.lastAt - a.lastAt)
+      const list = changesList(S, { showReads: ui.showReads, by: ui.filesBy })
       const sel = list.find(f => f.path === ui.selFile) ?? list[0]
       if (sel && (ui.fullFile || !sel.diff.length) && !isMedia(sel.path)) {
         const key = `${sel.path}@${sel.lastAt}`

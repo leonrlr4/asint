@@ -7,7 +7,7 @@ import { type Cell, compute, type LayoutNode, type Panel } from './layout'
 import { lineOf, type LiveEdit } from './live'
 import { agentSpots, agentsOf, type MapView } from './map'
 
-import { type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
+import { changesList, type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
 import { mix } from './palette'
 import { miniOf, renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from './sprites'
 import { badgeOf, hotDirs, hotFilesOf, statusOf, type GitState, type StatusKind, type Tone } from './tree'
@@ -42,6 +42,8 @@ export type UiState = {
   selStep?: string
   /** The ORCH card opened to show what that agent did lately. */
   selAgent?: string
+  /** CHANGES lists only this agent's files while an ORCH card is open. */
+  filesBy?: string
   mediaFilter: 'ALL' | MediaKind
   selMedia?: string
   /** Scroll position per card (or per detail area `<panel>:detail`). The wheel scrolls the card, not the whole pane. */
@@ -107,6 +109,7 @@ export type Actions = {
   mapView: (v: UiState['mapView']) => void
   selTodo: (key: string) => void
   selAgent: (id: string) => void
+  clearFilesBy: () => void
   selStep: (id: string) => void
   /** Jump to the EXEC card with this command selected. */
   gotoExec: (id: string) => void
@@ -373,7 +376,7 @@ const fileRow = (c: ViewCtx, f: FileEntry, i: number) => {
 export function filesTab(c: ViewCtx, maxRows: number) {
   const { el, s, p, ui, act } = c
   const { Box, Text, Button, Code, Image } = el
-  const list = [...s.files.values()].filter(f => ui.showReads || f.op !== 'R').sort((a, b) => b.lastAt - a.lastAt)
+  const list = changesList(s, { showReads: ui.showReads, by: ui.filesBy })
   const sel = list.find(f => f.path === ui.selFile) ?? list[0]
   const wide = isWide(c)
   const listRows = Math.max(3, Math.min(list.length, Math.floor(maxRows * 0.4)))
@@ -423,7 +426,9 @@ export function filesTab(c: ViewCtx, maxRows: number) {
         <Box flexDirection="row" columnGap={1}>
           <Text color={p.muted}>{t(`${list.length} 個檔案`, `${list.length} files`)}</Text>
           <Button key="reads" hotkey="r" plain dimColor label={ui.showReads ? t('藏起只讀的', 'Hide reads') : t('顯示只讀的', 'Show reads')} onPress={act.toggleReads} />
+          {ui.filesBy ? <Button key="by" plain label={`${whoLabel(s, ui.filesBy)} ✕`} onPress={act.clearFilesBy} /> : null}
         </Box>
+        {!list.length && ui.filesBy ? <Text color={p.muted}>{t('這個 agent 還沒有動過檔案。', 'This agent has not touched any file yet.')}</Text> : null}
         {list.slice(lstart, lstart + rows).map((f, i) => fileRow(cc, f, i))}
         {list.length > rows ? <Text color={p.faint}>{pos(lstart, rows, list.length).trim()} · {t('滾輪捲動', 'scroll to see more')}</Text> : null}
       </Box>
