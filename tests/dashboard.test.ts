@@ -1,6 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 
 import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '../hooks/views'
+import { filesVim, treeVim } from '../hooks/vim'
 import { badgeOf, hotDirs, hotFilesOf, isHot, parseGit, statusOf } from '../hooks/tree'
 import { changesList, emptySession, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
@@ -615,4 +616,33 @@ test('opening an ORCH card narrows CHANGES to that agent and closing it lifts th
   expect(await ui.find({ key: 'by' })).toBeTruthy()
   await ui.press({ key: 'by' })
   expect(await texts(ui)).toContain('other.ts')
+})
+
+test('vim keys as pure functions: top, bottom, half pages, Enter and the preview focus', () => {
+  const rows = Array.from({ length: 30 }, (_, i) => ({ path: `d/f${i}`, dir: false, open: false, depth: 1 }))
+  const dir = { path: 'd', dir: true, open: false, depth: 0 }
+  const all = [dir, ...rows]
+  const ui: any = { treeCur: 'd', treeFocus: 'tree', scroll: {}, hx: {} }
+  expect(treeVim('bottom', all, ui)).toEqual({ manual: true })
+  expect(ui.treeCur).toBe('d/f29')
+  treeVim('top', all, ui)
+  expect(ui.treeCur).toBe('d')
+  treeVim('pagedown', all, ui)
+  expect(ui.treeCur).toBe('d/f9')
+  treeVim('pageup', all, ui)
+  expect(ui.treeCur).toBe('d')
+  expect(treeVim('enter', all, ui)).toEqual({ toggle: 'd' })
+  ui.treeCur = 'd/f3'
+  treeVim('enter', all, ui)
+  expect(ui.treeFocus).toBe('preview')
+  expect(treeVim('j', all, ui)).toEqual({ vpan: ['project:detail', 3] })
+  treeVim('h', all, ui)
+  expect(ui.treeFocus).toBe('tree')
+  const list = [{ path: '/a' }, { path: '/b' }, { path: '/c' }] as any
+  const fui: any = { selFile: '/a', filesFocus: 'list', scroll: {}, hx: {} }
+  filesVim('bottom', list, fui)
+  expect(fui.selFile).toBe('/c')
+  filesVim('enter', list, fui)
+  expect(fui.filesFocus).toBe('preview')
+  expect(filesVim('top', list, fui)).toEqual({ vpan: ['files:detail', -1e6] })
 })

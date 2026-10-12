@@ -10,6 +10,7 @@ import {
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
 import { briefTool } from './brief'
+import { filesVim, treeVim, type VimEffect, type VimKey } from './vim'
 import { parseGit, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
@@ -691,62 +692,21 @@ async function refreshGit($: EngineInterface) {
 // h out, j down, k up, l in. In the tree the cursor walks the rows (a folder opens with l, closes or jumps to its parent with h,
 // and l on a file moves into its preview, where j and k scroll and h comes back). CHANGES works the same on its file list.
 
-function treeCursor(row: { path: string; dir: boolean }) {
-  manualAt = Date.now()
-  ui.treeCur = row.path
-  ui.keepCursor = true
-  if (!row.dir) {
-    ui.treeSel = row.path
-    ui.scroll['project:detail'] = 0
-    ui.hx['project:detail'] = 0
-  }
+/** Applies what a vim key asked for: the pure functions in vim.ts change the view state, the rest needs the engine's actions. */
+function applyVim(effect: VimEffect | undefined) {
+  if (!effect) return
+  if (effect.manual) manualAt = Date.now()
+  if (effect.vpan) act?.vpan(effect.vpan[0], effect.vpan[1])
+  if (effect.toggle) act?.treeToggle(effect.toggle)
 }
 
-function treeVim(key: 'h' | 'j' | 'k' | 'l') {
+function treeKey(key: VimKey) {
   if (!project) return
-  if (ui.treeFocus === 'preview') {
-    if (key === 'h') ui.treeFocus = 'tree'
-    else if (key === 'j' || key === 'k') act.vpan('project:detail', key === 'j' ? 3 : -3)
-    return
-  }
-  const { rows } = projectRows(project, S.files, gitState, live?.path, ui)
-  if (!rows.length) return
-  const here = ui.treeCur ?? ui.treeSel
-  const idx = Math.max(0, rows.findIndex(r => r.path === here))
-  const row = rows[idx]!
-  if (key === 'j' || key === 'k') {
-    const next = rows[Math.min(rows.length - 1, Math.max(0, idx + (key === 'j' ? 1 : -1)))]!
-    treeCursor(next)
-  } else if (key === 'l') {
-    if (!row.dir) { treeCursor(row); ui.treeFocus = 'preview' }
-    else if (!row.open) act.treeToggle(row.path)
-    else if (rows[idx + 1] && rows[idx + 1]!.depth > row.depth) treeCursor(rows[idx + 1]!)
-  } else if (key === 'h') {
-    if (row.dir && row.open) act.treeToggle(row.path)
-    else {
-      const parent = [...rows.slice(0, idx)].reverse().find(r => r.dir && r.depth < row.depth)
-      if (parent) treeCursor(parent)
-    }
-  }
+  applyVim(treeVim(key, projectRows(project, S.files, gitState, live?.path, ui).rows, ui))
 }
 
-function filesVim(key: 'h' | 'j' | 'k' | 'l') {
-  if (ui.filesFocus === 'preview') {
-    if (key === 'h') ui.filesFocus = 'list'
-    else if (key === 'j' || key === 'k') act.vpan('files:detail', key === 'j' ? 3 : -3)
-    return
-  }
-  const list = changesList(S, { showReads: ui.showReads, by: ui.filesBy })
-  if (!list.length) return
-  const idx = Math.max(0, list.findIndex(f => f.path === ui.selFile))
-  if (key === 'j' || key === 'k') {
-    const next = list[Math.min(list.length - 1, Math.max(0, idx + (key === 'j' ? 1 : -1)))]!
-    ui.selFile = next.path
-    ui.fullFile = false
-    ui.hx['files:detail'] = 0
-    ui.scroll['files:detail'] = 0
-    ui.keepCursor = true
-  } else if (key === 'l') ui.filesFocus = 'preview'
+function filesKey(key: VimKey) {
+  applyVim(filesVim(key, changesList(S, { showReads: ui.showReads, by: ui.filesBy }), ui))
 }
 
 // ── FILES follow mode ────────────────────────────────────
@@ -1027,8 +987,8 @@ function makeActions($: EngineInterface): Actions {
     },
     vim: (panel, key) => {
       lastPanel = panel
-      if (panel === 'project') treeVim(key)
-      else filesVim(key)
+      if (panel === 'project') treeKey(key)
+      else filesKey(key)
       redraw()
     },
     setRoot: dir => {

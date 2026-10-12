@@ -92,7 +92,7 @@ export type Actions = {
   /** Show another folder in the FILES tree; undefined goes back to the session's own. */
   setRoot: (dir: string | undefined) => void
   /** The vim keys of the FILES and CHANGES cards: h out, j down, k up, l in. */
-  vim: (panel: 'project' | 'files', key: 'h' | 'j' | 'k' | 'l') => void
+  vim: (panel: 'project' | 'files', key: 'h' | 'j' | 'k' | 'l' | 'enter' | 'top' | 'bottom' | 'pagedown' | 'pageup') => void
   treeSelect: (path: string) => void
   toggleFollow: () => void
   /** ARCH: press a node (enters it if already selected and drillable), jump to breadcrumb level i, pan horizontally, open the full viewer in a browser. */
