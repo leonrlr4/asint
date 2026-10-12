@@ -1,6 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 
 import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '../hooks/views'
+import { badgeOf, hotDirs, hotFilesOf, isHot, parseGit, statusOf } from '../hooks/tree'
 import { emptySession, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
 
@@ -8,7 +9,7 @@ const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isS
 let clock = 1_000_000
 
 // Minimal fake answers for engine calls the test harness does not implement.
-const host = (on: any, rec: { opens: any[]; closes: any[]; placed?: boolean; fileText?: string } = { opens: [], closes: [] }) => {
+const host = (on: any, rec: { opens: any[]; closes: any[]; placed?: boolean; fileText?: string; ls?: string } = { opens: [], closes: [] }) => {
   const kv = new Map<string, unknown>()
   on('store.get', (_$: unknown, e: { key: string }) => ({ value: kv.get(e.key) }))
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => (kv.set(e.key, e.value), { value: undefined }))
@@ -21,7 +22,7 @@ const host = (on: any, rec: { opens: any[]; closes: any[]; placed?: boolean; fil
   on('fs.exists', () => ({ value: false }))
   on('fs.read', () => ({ value: rec.fileText ?? 'line1\nline2\n' }))
   on('fs.write', () => ({ value: undefined }))
-  on('process.run', () => out(''))
+  on('process.run', (_$: unknown, e: { argv: readonly string[] }) => (e.argv.includes('--show-toplevel') ? out('/w\n') : e.argv.includes('-co') ? out(rec.ls ?? '') : out('')))
   on('ui.open', (_$: unknown, e: any) => (rec.opens.push(e), { value: { isPlaced: rec.placed ?? true } }))
   on('ui.close', (_$: unknown, e: any) => (rec.closes.push(e), { value: undefined }))
   on('command.register', () => ({ value: undefined }))
@@ -405,4 +406,60 @@ test('a resumed session shows its saved checklist and picks up the view it was l
   await $.session.start({ source: 'resume', cwd: '/w' } as never).catch(() => {})
   const ui: any = await mount($)
   expect(await texts(ui)).toContain('saved checklist item')
+})
+
+test('git output becomes marks: changed beats committed, untracked is its own mark', () => {
+  const g = parseGit('src/a.ts\n', 'new.txt\n', 'src/a.ts\nsrc/b.ts\n\n')
+  expect(g.get('src/a.ts')).toBe('M')
+  expect(g.get('src/b.ts')).toBe('C')
+  expect(g.get('new.txt')).toBe('?')
+  expect(g.size).toBe(3)
+})
+
+test('file badges: known types get two letters, unknown ones the extension, folders of dotfiles are GT', () => {
+  expect(badgeOf('client.ts').text).toBe('TS')
+  expect(badgeOf('package.json').text).toBe('{}')
+  expect(badgeOf('Dockerfile').text).toBe('DK')
+  expect(badgeOf('.gitignore').text).toBe('GT')
+  expect(badgeOf('notes.xyz').text).toBe('XY')
+  expect(badgeOf('LICENSE').text).toBe('  ')
+})
+
+test('file status: editing beats a commit beats the session edit beats git; reading alone is not hot', () => {
+  const touched = (op: 'R' | 'M' | 'A') => ({ path: '/w/a.ts', op, count: 1, lastAt: 1, lastOp: op, by: ['main'], diff: [] })
+  expect(statusOf(touched('M'), 'C', true)?.kind).toBe('editing')
+  expect(statusOf(touched('M'), 'C', false)?.kind).toBe('committed')
+  expect(statusOf(touched('A'), undefined, false)?.kind).toBe('new')
+  expect(statusOf(touched('M'), undefined, false)?.kind).toBe('edited')
+  expect(statusOf(touched('R'), undefined, false)?.kind).toBe('read')
+  expect(statusOf(undefined, 'M', false)?.kind).toBe('modified')
+  expect(statusOf(undefined, '?', false)?.kind).toBe('untracked')
+  expect(statusOf(undefined, undefined, false)).toBeUndefined()
+  expect(isHot(touched('R'), undefined, false)).toBe(false)
+  expect(isHot(touched('M'), undefined, false)).toBe(true)
+})
+
+test('hot folders: every ancestor of a hot file, with a count', () => {
+  const files = new Map([['/w/src/api/a.ts', { path: '/w/src/api/a.ts', op: 'M' as const, count: 1, lastAt: 1, lastOp: 'M' as const, by: ['main'], diff: [] }]])
+  const hot = hotFilesOf(['src/api/a.ts', 'src/api/b.ts', 'docs/x.md', 'README.md'], '/w', files, new Map([['docs/x.md', '?' as const]]), undefined)
+  expect(hot).toEqual(['src/api/a.ts', 'docs/x.md'])
+  const dirs = hotDirs(hot)
+  expect([...dirs.keys()].sort()).toEqual(['docs', 'src', 'src/api'])
+  expect(dirs.get('src')).toBe(1)
+})
+
+test('FILES tree: a file the agent edited gets a badge, a status and its folders open; others stay quiet', async ($, on) => {
+  host(on, { opens: [], closes: [], ls: 'src/api/a.ts\nsrc/api/b.ts\ndocs/x.md\nREADME.md\n' })
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await new Promise(r => setTimeout(r, 50))
+  await $.tool.call({ tool: 'Edit', tool_use_id: 't1', file_path: '/w/src/api/a.ts', old_string: 'a', new_string: 'b' } as never)
+  const ui: any = await mount($)
+  await ui.press({ key: 'ct-project' })
+  await ui.press({ key: 'zen-project' })
+  const all = await texts(ui)
+  expect(all).toContain('a.ts')
+  expect(all).toContain('TS')
+  expect(all).toContain('edited')
+  expect(all).toContain('b.ts')
+  expect(all).not.toContain('x.md')
 })

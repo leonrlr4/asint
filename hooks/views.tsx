@@ -9,6 +9,7 @@ import { agentSpots, agentsOf, type MapView } from './map'
 
 import { type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
 import { mix } from './palette'
+import { badgeOf, hotDirs, hotFilesOf, statusOf, type GitState, type StatusKind, type Tone } from './tree'
 import { getLang, t } from './i18n'
 
 // Dashboard tab views: pure functions over data and callbacks. They never touch $ ($ is only usable in register.tsx).
@@ -59,6 +60,9 @@ export type UiState = {
   hx: Record<string, number>
   /** Where the user dragged each card's list/preview divider: the left side's share of the card, by panel. */
   splitRatio: Record<string, number>
+  /** Folders the user closed although they hold changed files (those open by themselves), and the "only changed files" switch of the FILES tree. */
+  treeShut: Record<string, true>
+  treeChanged: boolean
 }
 
 export type Actions = {
@@ -71,6 +75,7 @@ export type Actions = {
   minimize: () => void
   /** FILES: expand/collapse folders, select files. */
   treeToggle: (dir: string) => void
+  toggleChanged: () => void
   treeSelect: (path: string) => void
   toggleFollow: () => void
   /** ARCH: press a node (enters it if already selected and drillable), jump to breadcrumb level i, pan horizontally, open the full viewer in a browser. */
@@ -137,6 +142,8 @@ export type ViewCtx = {
   filePreview?: { path: string; frame: string; width: number; height: number }
   /** FILES (project tree): root and relative paths of all files; contents or preview of the selected file. */
   project?: { root: string; paths: string[]; truncated: boolean }
+  /** What git says about each project file (root-relative); empty outside a repository. */
+  git: GitState
   treeText?: string
   treePreview?: { path: string; frame: string; width: number; height: number }
   /** FILES follow mode: the edit call being streamed; the lines just changed (0-based, inclusive), highlighted for a few seconds. */
@@ -660,14 +667,14 @@ export function todoTab(c: ViewCtx, maxRows: number) {
         {s.todos.slice(start, start + listRows).map((td, i) => {
           const on = td.key === sel.key
           if (td.status === 'in_progress')
-            return <el.Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: td.content, pick: `todo:${td.key}`, palette: p, skin, elapsedMs: td.startedAt ? now - td.startedAt : 0, width: w, lang: getLang() }} />
+            return <el.Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: td.content, pick: `todo:${td.key}`, palette: p, skin, elapsedMs: td.startedAt ? now - td.startedAt : 0, suffix: td.startedAt ? fmtClock(td.startedAt) : '', pad: 6, width: w, lang: getLang() }} />
           const done = td.status === 'completed'
           const fresh = done && td.doneAt && now - td.doneAt < 3000
           return (
             <Box key={`todo-${i}`} flexDirection="row" backgroundColor={on ? p.surface : undefined}>
-              <Text color={done ? p.success : p.faint}>{on ? '▸' : ' '}{done ? '✓ ' : '○ '}</Text>
+              <Text color={done ? p.success : p.faint}>{on ? '▸' : ' '}{done ? '✓' : '○'} </Text>
               <Box flexGrow={1} flexShrink={1}><Button key={`tsel-${i}`} plain label={clip(td.content, Math.max(8, w - 24))} onPress={() => act.selTodo(td.key)} /></Box>
-              {done && td.doneAt ? <Text color={p.faint}> {td.startedAt ? fmtDur(td.doneAt - td.startedAt) : ''} {fmtClock(td.doneAt)}</Text> : null}
+              {done && td.doneAt ? <Text color={p.faint}> {(td.startedAt ? fmtDur(td.doneAt - td.startedAt) : '').padStart(6)} {td.startedAt ? fmtClock(td.startedAt) : '        '}</Text> : <Text color={p.faint}> {''.padStart(6)} {td.startedAt ? fmtClock(td.startedAt) : '        '}</Text>}
             </Box>
           )
         })}
@@ -798,11 +805,23 @@ export function projectTab(c: ViewCtx, maxRows: number) {
   const { Box, Text, Button, Code, Image } = el
   if (!project) return <Text color={p.muted}>{t('讀取專案檔案中…', 'Reading project files…')}</Text>
   const wide = isWide(c)
-  const rows = treeRows(project.paths, ui.treeOpen)
-  const listRows = Math.max(3, (wide ? maxRows : Math.floor(maxRows * 0.45)) - 2)
+  const hotFiles = hotFilesOf(project.paths, project.root, s.files, c.git, c.live?.path)
+  const hotSet = new Set(hotFiles)
+  const hot = hotDirs(hotFiles)
+  // Folders holding something changed open by themselves unless the user closed them; "changed only" hides the rest.
+  const open: Record<string, true> = { ...ui.treeOpen }
+  for (const dir of hot.keys()) if (!ui.treeShut[dir]) open[dir] = true
+  const rows = treeRows(ui.treeChanged ? hotFiles : project.paths, open)
+  const listRows = Math.max(3, (wide ? maxRows : Math.floor(maxRows * 0.45)) - 3)
   const touched = (rel: string) => s.files.get(`${project.root}/${rel}`)
+  const tone = (x: Tone) => (x === 'accent' ? p.accent : x === 'success' ? p.success : x === 'warn' ? p.warn : x === 'error' ? p.error : x === 'muted' ? p.muted : p.faint)
+  const label = (k: StatusKind) =>
+    k === 'editing' ? t('編輯中', 'editing') : k === 'new' ? t('新建', 'new') : k === 'edited' ? t('已改', 'edited') : k === 'read' ? t('只讀', 'read')
+    : k === 'committed' ? t('已 commit', 'committed') : k === 'modified' ? t('有變更', 'changed') : t('未追蹤', 'untracked')
+  const spin = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][Math.floor(c.now / 100) % 10]
   const tree = (width: number) => {
     const start = scrollAt(c, 'project', rows.length - listRows)
+    const showTime = width >= 46
     return (
       <Box flexDirection="column" width={width}>
         <Box flexDirection="row" columnGap={1}>
@@ -811,20 +830,35 @@ export function projectTab(c: ViewCtx, maxRows: number) {
           <Box flexGrow={1} />
           <Button key="follow" plain dimColor={!ui.follow} label={ui.follow ? t('● 跟隨', '● Follow') : t('○ 跟隨', '○ Follow')} onPress={act.toggleFollow} />
         </Box>
+        <Box flexDirection="row" columnGap={1}>
+          <Button key="changed" plain dimColor={!ui.treeChanged} label={ui.treeChanged ? t('● 只看動過的', '● Changed only') : t('○ 只看動過的', '○ Changed only')} onPress={act.toggleChanged} />
+          <Text color={p.faint}>{hotFiles.length ? t(`${hotFiles.length} 個動過`, `${hotFiles.length} changed`) : ''}</Text>
+        </Box>
+        {!rows.length ? <Text color={p.muted}>{t('這個 session 還沒有動過的檔案。', 'No files changed in this session yet.')}</Text> : null}
         {rows.slice(start, start + listRows).map(r => {
           const f = r.dir ? undefined : touched(r.path)
           const isSel = !r.dir && r.path === ui.treeSel
+          const editing = !r.dir && c.live?.path === `${project.root}/${r.path}`
+          const st = r.dir ? undefined : statusOf(f, c.git.get(r.path), editing)
+          const count = r.dir ? hot.get(r.path) : undefined
+          const badge = r.dir ? undefined : badgeOf(r.name)
+          const chip = st ? `${st.kind === 'editing' ? `${spin} ` : ''}${label(st.kind)}` : ''
+          const timeW = showTime ? 9 : 0
+          const nameW = Math.max(6, width - r.depth * 2 - 3 - (chip ? chip.length + 1 : 0) - (count ? 4 : 0) - timeW)
           return (
-            <Box key={`tr-${r.path}`} flexDirection="row" backgroundColor={isSel ? p.surface : undefined}>
+            <Box key={`tr-${r.path}`} flexDirection="row" backgroundColor={isSel ? p.surface : st?.kind === 'editing' ? mix(p.bg, p.accent, 0.12) : undefined}>
               <Text>{'  '.repeat(r.depth)}</Text>
+              {r.dir
+                ? <Text color={count ? p.accent : p.faint}>{r.open ? '▾' : '▸'} </Text>
+                : <Text color={tone(badge!.tone)} bold>{badge!.text} </Text>}
               <Box flexGrow={1} flexShrink={1}>
-                <Button key={`tb-${r.path}`} plain dimColor={!r.dir && !f && !isSel}
-                  label={clip(r.dir ? `${r.open ? '▾' : '▸'} ${r.name}/` : `  ${r.name}`, Math.max(4, width - r.depth * 2 - 3))}
+                <Button key={`tb-${r.path}`} plain dimColor={!r.dir && !st && !isSel}
+                  label={clip(r.dir ? `${r.name}/` : r.name, nameW)}
                   onPress={() => (r.dir ? act.treeToggle(r.path) : act.treeSelect(r.path))} />
               </Box>
-              {c.live?.path === `${project.root}/${r.path}`
-                ? <Text color={p.accent} bold> ✎</Text>
-                : f ? <Text color={opColor(p, f.op)}> {f.op}</Text> : null}
+              {count ? <Text color={p.accent}> {count}</Text> : null}
+              {st ? <Text color={tone(st.tone)} bold={st.kind === 'editing'}> {chip}</Text> : null}
+              {showTime && !r.dir ? <Text color={p.faint}> {f ? fmtClock(f.lastAt) : ''.padStart(8)}</Text> : null}
             </Box>
           )
         })}
@@ -1224,7 +1258,7 @@ function cellCard(c: ViewCtx, cell: Cell, k: number) {
 export function dashboard(c: ViewCtx, layout: LayoutNode) {
   const { cells } = compute(layout, { x: 0, y: 0, w: c.width, h: c.rows })
   return (
-    <c.el.Box width={c.width} height={c.rows} position="relative">
+    <c.el.Box width={c.width} height={c.rows} position="relative" backgroundColor={c.p.bg}>
       {cells.map((cell, k) => cellCard(c, cell, k))}
     </c.el.Box>
   )

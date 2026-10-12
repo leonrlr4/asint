@@ -9,6 +9,7 @@ import {
   applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
+import { hotDirs, hotFilesOf, parseGit, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
 import { type ArchNode, parseLikeC4 } from './arch'
@@ -81,7 +82,7 @@ const ACTIVE_MS = 3000
 let S: Session = emptySession()
 const ui: UiState = {
   tab: 'files', mapView: 'combo', comboSlot: 0, fullFile: false, showReads: true, mediaFilter: 'ALL', scroll: {},
-  archTrail: [], archDirs: [], archPanX: 0, hx: {}, splitRatio: {}, treeOpen: {}, follow: true,
+  archTrail: [], archDirs: [], archPanX: 0, hx: {}, splitRatio: {}, treeShut: {}, treeChanged: false, treeOpen: {}, follow: true,
 }
 const scrollMax = new Map<string, number>()
 // Last rendered pane size; wheel events use it to find the card under the pointer. Keyboard scrolling scrolls the card clicked last.
@@ -185,7 +186,7 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 const SESSIONS_DIR = '.cache/asint/sessions'
 const SAVE_DAYS = 14
 /** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'treeSel', 'treeOpen', 'follow', 'scroll', 'hx'] as const
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'treeSel', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -281,6 +282,7 @@ async function tick($: EngineInterface) {
   if (ticks % 20 === 0 && !editing && (await loadLayout($))) $.ui.invalidate('ui.render')
   if (ticks % 50 === 25) void refreshLocation($)
   if (ticks % 50 === 10) void persist($)
+  if (ticks % 40 === 15 && paneOpen && isShown(shown(), 'project')) void refreshGit($)
   if (archInitPending) {
     archInitPending = false
     void $.prompt.submit({ text: archInitAsk(), asUser: true }).catch(() => undefined)
@@ -624,6 +626,10 @@ async function addMedia($: EngineInterface, path: string) {
 const TREE_MAX = 4000
 let project: ViewCtx['project']
 let projectBusy = false
+/** What git says about the project's files, and when the session's first event happened (commits before it do not count as "committed"). */
+let gitState: GitState = new Map()
+let gitBusy = false
+let sessionSince = Date.now()
 let treeCache: { key: string; text?: string } = { key: '' }
 
 /** In a git repo, list files with git (tracked plus untracked files not ignored by .gitignore); otherwise use find, skipping hidden dirs and node_modules. */
@@ -643,9 +649,36 @@ async function refreshProject($: EngineInterface) {
       if (project?.root !== root) { ui.treeOpen = {}; ui.treeSel = undefined }
       project = next
       $.ui.invalidate('ui.render')
+      void refreshGit($)
     }
   } finally {
     projectBusy = false
+  }
+}
+
+/** Reads which files git sees as changed, untracked, or committed since this session began; the FILES tree labels them. */
+async function refreshGit($: EngineInterface) {
+  if (gitBusy || !project) return
+  gitBusy = true
+  try {
+    const root = project.root
+    const run = async (args: string[]) => {
+      const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 8_000 }).catch(() => undefined)
+      return r && r.exitCode === 0 ? r.stdout : ''
+    }
+    const since = new Date(sessionSince).toISOString()
+    const [diff, untracked, committed] = await Promise.all([
+      run(['diff', '--name-only', 'HEAD']),
+      run(['ls-files', '-o', '--exclude-standard']),
+      run(['log', '--name-only', '--pretty=format:', `--since=${since}`]),
+    ])
+    const next = parseGit(diff, untracked, committed)
+    if (JSON.stringify([...next]) !== JSON.stringify([...gitState])) {
+      gitState = next
+      $.ui.invalidate('ui.render')
+    }
+  } finally {
+    gitBusy = false
   }
 }
 
@@ -906,10 +939,14 @@ function makeActions($: EngineInterface): Actions {
     },
     treeToggle: dir => {
       lastPanel = 'project'
-      if (ui.treeOpen[dir]) delete ui.treeOpen[dir]
-      else ui.treeOpen[dir] = true
+      // A folder holding changed files is open without being in treeOpen; closing it is remembered in treeShut.
+      const hot = project ? hotDirs(hotFilesOf(project.paths, project.root, S.files, gitState, live?.path)) : new Map<string, number>()
+      const isOpen = !!ui.treeOpen[dir] || (hot.has(dir) && !ui.treeShut[dir])
+      if (isOpen) { delete ui.treeOpen[dir]; ui.treeShut[dir] = true }
+      else { delete ui.treeShut[dir]; ui.treeOpen[dir] = true }
       redraw()
     },
+    toggleChanged: () => { lastPanel = 'project'; ui.treeChanged = !ui.treeChanged; redraw() },
     toggleFollow: () => { ui.follow = !ui.follow; redraw() },
     treeSelect: path => {
       manualAt = Date.now()
@@ -1010,7 +1047,10 @@ export const register: Register = on => {
     act = makeActions($)
     sid = await $.session.id()
     savedText = ''
+    sessionSince = Date.now()
+    gitState = new Map()
     await restoreSession($)
+    sessionSince = Math.min(sessionSince, ...S.log.map(x => x.at), ...S.execs.map(x => x.startedAt))
     void cleanSessions($)
     ui.zen = undefined
     const own = await $.store.get(`minimized:${sid}`)
@@ -1457,7 +1497,7 @@ export const register: Register = on => {
     }
     for (const t of PANELS) if (isShown(shown(), t)) fresh.delete(t)
 
-    const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, treeText, treePreview, live, flash,
+    const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, git: gitState, treeText, treePreview, live, flash,
       oOwner: oOwner(), current: paneFocused ? (ui.zen ?? (isShown(shown(), lastPanel) ? lastPanel : undefined)) : undefined }
     try {
       return dashboard(ctx, shown())

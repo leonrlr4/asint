@@ -18,6 +18,8 @@ export type ShimmerProps = {
   width: number
   /** What a click on the row reports to the hooks as `{ pick }` (a Client, unlike a Button, cannot hold the row's text, so it takes the click itself). */
   pick?: string
+  /** Pads the timer to this many columns so it lines up with the finished rows above and below it. */
+  pad?: number
   /** UI language from the hooks side (client modules cannot import ./i18n). Every fixed string here is ASCII and the same in both languages. */
   lang?: 'en' | 'zh'
 }
@@ -42,7 +44,7 @@ const Shimmer: ClientModule<ShimmerProps, State> = (props, surface) => {
   // Animation and text style are shared by every skin (user decision, 2026-10-06); the skin only picks colors.
   const glyph = BARS[ticks % BARS.length]
   const elapsed = props.elapsedMs + ticks * TICK_MS
-  const timer = `${formatDuration(elapsed)}${props.suffix ? ` ${props.suffix}` : ''}`
+  const timer = `${formatDuration(elapsed).padStart(props.pad ?? 0)}${props.suffix ? ` ${props.suffix}` : ''}`
   const room = Math.max(4, props.width - timer.length - 4)
   const chars = [...props.text].slice(0, room)
   const span = chars.length + RADIUS * 4
@@ -56,7 +58,7 @@ const Shimmer: ClientModule<ShimmerProps, State> = (props, surface) => {
       <Box flexGrow={1} flexShrink={1}>
         <Text wrap="truncate-end">
           {chars.map((ch, i) => (
-            <Text color={mix(p.base, p.hi, glow(i))} bold={glow(i) > 0.5}>{ch}</Text>
+            <Text color={mix(p.hi, p.accent, glow(i))} bold={glow(i) > 0.5}>{ch}</Text>
           ))}
         </Text>
       </Box>
