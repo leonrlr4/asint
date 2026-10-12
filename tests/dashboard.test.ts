@@ -2,6 +2,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '../hooks/views'
 import { filesVim, treeVim } from '../hooks/vim'
+import { gitQueries, listArgv, parseListing, TREE_MAX } from '../hooks/tree'
 import { badgeOf, hotDirs, hotFilesOf, isHot, parseGit, statusOf } from '../hooks/tree'
 import { changesList, emptySession, endAgentFromNotification, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
@@ -679,4 +680,16 @@ test('a task notification ends the agent it names, and only if that agent still 
   expect(s.agents.get('a1')!.endedAt).toBe(9000)
   expect(s.agents.get('a1')!.doing).toBeUndefined()
   expect(s.agents.get('a2')!.endedAt).toBe(1500)
+})
+
+test('project listing: git for a repository, find for a folder; paths lose the root and are cut at the maximum', () => {
+  expect(listArgv('/w', true)).toEqual(['git', '-C', '/w', 'ls-files', '-co', '--exclude-standard'])
+  expect(listArgv('/w', false)[0]).toBe('find')
+  const out = ['/w/a/b.ts', 'c.md', '/w/d/e.py'].join('\n')
+  expect(parseListing(out, '/w')).toEqual({ root: '/w', paths: ['a/b.ts', 'c.md', 'd/e.py'], truncated: false })
+  const big = Array.from({ length: TREE_MAX + 3 }, (_, i) => `f${i}`).join('\n')
+  const cut = parseListing(big, '/w')
+  expect(cut.paths.length).toBe(TREE_MAX)
+  expect(cut.truncated).toBe(true)
+  expect(gitQueries(0).committed[3]).toBe('--since=1970-01-01T00:00:00.000Z')
 })

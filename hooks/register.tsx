@@ -6,12 +6,13 @@ import type { Palette, Skin } from '../types'
 import { Canvas } from './canvas'
 import { draw } from './map'
 import {
-  applyTaskCreate, applyTaskUpdate, applyTodoWrite, changesList, emptySession, endAgentFromNotification, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
+  applyTaskCreate, applyTaskUpdate, applyTodoWrite, changesList, emptySession, endAgentFromNotification, exitCodeOf, isMedia, log, mediaKind, reviveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
 import { briefTool } from './brief'
+import { applySavedView, cleanArgv, serializeSession, SESSIONS_DIR, sessionPath } from './persist'
 import { filesVim, treeFind, treeVim, type VimEffect, type VimKey } from './vim'
-import { parseGit, type GitState } from './tree'
+import { gitQueries, listArgv, parseGit, parseListing, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
 import { type ArchNode, parseLikeC4 } from './arch'
@@ -186,10 +187,6 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 // ── Saving the session ───────────────────────────────────────────────────
 // What the dashboard shows is kept in memory; a resumed session has the same id, so it is written to
 // ~/.cache/asint/sessions/<session id>.json (data and the view the user left it in) and read back at session start.
-const SESSIONS_DIR = '.cache/asint/sessions'
-const SAVE_DAYS = 14
-/** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'filesBy', 'treeSel', 'treeRoot', 'treeSearch', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -197,9 +194,7 @@ async function persist($: EngineInterface) {
   if (!sid) return
   const home = await $.env.get('HOME')
   if (!home) return
-  const view: Record<string, unknown> = {}
-  for (const k of SAVED_UI) view[k] = ui[k]
-  const text = JSON.stringify({ ...saveSession(S), view })
+  const text = serializeSession(S, ui)
   if (text === savedText) return
   savedText = text
   if (!sessionsDirReady) {
@@ -207,34 +202,25 @@ async function persist($: EngineInterface) {
     sessionsDirReady = true
   }
   // A failed write (read-only home, test environment) only means nothing is restored later.
-  await $.fs.write(`${home}/${SESSIONS_DIR}/${sid}.json`, text).catch(() => undefined)
+  await $.fs.write(sessionPath(home, sid), text).catch(() => undefined)
 }
 
 async function restoreSession($: EngineInterface) {
   const home = await $.env.get('HOME')
   if (!home || !sid) return
-  const text = await $.fs.read(`${home}/${SESSIONS_DIR}/${sid}.json`).catch(() => undefined)
+  const text = await $.fs.read(sessionPath(home, sid)).catch(() => undefined)
   const revived = reviveSession(typeof text === 'string' ? text : undefined)
   if (!revived) return
   S = revived
   savedText = text as string
-  try {
-    const view = (JSON.parse(text as string) as { view?: Record<string, unknown> }).view ?? {}
-    const target = ui as Record<string, unknown>
-    for (const k of SAVED_UI) {
-      // A value of another type than the field holds now (an old file, a hand edit) is left out.
-      if (view[k] !== undefined && (target[k] === undefined || typeof target[k] === typeof view[k])) target[k] = view[k]
-    }
-  } catch {
-    // A damaged view part leaves the defaults.
-  }
+  applySavedView(ui, text as string)
 }
 
 /** Saved sessions older than SAVE_DAYS are not coming back. */
 async function cleanSessions($: EngineInterface) {
   const home = await $.env.get('HOME')
   if (!home) return
-  await $.process.run(['find', `${home}/${SESSIONS_DIR}`, '-name', '*.json', '-mtime', `+${SAVE_DAYS}`, '-delete']).catch(() => undefined)
+  await $.process.run(cleanArgv(home)).catch(() => undefined)
 }
 
 
@@ -627,8 +613,6 @@ async function addMedia($: EngineInterface, path: string) {
 
 // ── FILES (project file tree) ──────────────────────────────────
 
-// Cap for large projects; outside a git repo, scan only 4 levels deep.
-const TREE_MAX = 4000
 let project: ViewCtx['project']
 let projectBusy = false
 /** What git says about the project's files, and when the session's first event happened (commits before it do not count as "committed"). */
@@ -648,11 +632,8 @@ async function refreshProject($: EngineInterface) {
     const cwd = ui.treeRoot ?? await $.session.cwd()
     const top = await $.process.run(['git', '-C', cwd, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 }).catch(() => undefined)
     const root = top && top.exitCode === 0 ? top.stdout.trim() : cwd
-    const r = top && top.exitCode === 0
-      ? await $.process.run(['git', '-C', root, 'ls-files', '-co', '--exclude-standard'], { timeoutMs: 10_000 }).catch(() => undefined)
-      : await $.process.run(['find', root, '-maxdepth', '4', '(', '-name', '.*', '-o', '-name', 'node_modules', ')', '-prune', '-o', '-type', 'f', '-print'], { timeoutMs: 10_000 }).catch(() => undefined)
-    const all = (r?.stdout ?? '').split('\n').filter(Boolean).map(x => (x.startsWith(`${root}/`) ? x.slice(root.length + 1) : x))
-    const next = { root, paths: all.slice(0, TREE_MAX), truncated: all.length > TREE_MAX }
+    const r = await $.process.run(listArgv(root, !!top && top.exitCode === 0), { timeoutMs: 10_000 }).catch(() => undefined)
+    const next = parseListing(r?.stdout ?? '', root)
     if (JSON.stringify(next) !== JSON.stringify(project)) {
       if (project?.root !== root) { ui.treeOpen = {}; ui.treeSel = undefined }
       project = next
@@ -674,12 +655,8 @@ async function refreshGit($: EngineInterface) {
       const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 8_000 }).catch(() => undefined)
       return r && r.exitCode === 0 ? r.stdout : ''
     }
-    const since = new Date(sessionSince).toISOString()
-    const [diff, untracked, committed] = await Promise.all([
-      run(['diff', '--name-only', 'HEAD']),
-      run(['ls-files', '-o', '--exclude-standard']),
-      run(['log', '--name-only', '--pretty=format:', `--since=${since}`]),
-    ])
+    const q = gitQueries(sessionSince)
+    const [diff, untracked, committed] = await Promise.all([run(q.diff), run(q.untracked), run(q.committed)])
     const next = parseGit(diff, untracked, committed)
     if (JSON.stringify([...next]) !== JSON.stringify([...gitState])) {
       gitState = next

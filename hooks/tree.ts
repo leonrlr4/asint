@@ -90,3 +90,25 @@ export function hotFilesOf(paths: readonly string[], root: string, files: Map<st
     return isHot(files.get(abs), git.get(rel), livePath === abs)
   })
 }
+
+/** The three questions put to git for the tree's labels, as argument lists (run in the project root): changed, untracked, committed since `since`. */
+export const gitQueries = (since: number): { diff: string[]; untracked: string[]; committed: string[] } => ({
+  diff: ['diff', '--name-only', 'HEAD'],
+  untracked: ['ls-files', '-o', '--exclude-standard'],
+  committed: ['log', '--name-only', '--pretty=format:', `--since=${new Date(since).toISOString()}`],
+})
+
+/** Most files the tree lists; a bigger project is cut here and says so. */
+export const TREE_MAX = 4000
+
+/** The command that lists a project's files: from git when it is a repository, otherwise the first four levels without hidden folders. */
+export const listArgv = (root: string, isRepo: boolean): string[] =>
+  isRepo
+    ? ['git', '-C', root, 'ls-files', '-co', '--exclude-standard']
+    : ['find', root, '-maxdepth', '4', '(', '-name', '.*', '-o', '-name', 'node_modules', ')', '-prune', '-o', '-type', 'f', '-print']
+
+/** The listing's output as the tree's project: paths relative to the root, cut at TREE_MAX. */
+export function parseListing(stdout: string, root: string): { root: string; paths: string[]; truncated: boolean } {
+  const all = stdout.split('\n').filter(Boolean).map(x => (x.startsWith(`${root}/`) ? x.slice(root.length + 1) : x))
+  return { root, paths: all.slice(0, TREE_MAX), truncated: all.length > TREE_MAX }
+}
