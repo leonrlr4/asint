@@ -56,7 +56,7 @@ export type Todo = {
 }
 
 export type LogKind = 'tool' | 'check' | 'agent' | 'turn' | 'media' | 'error'
-export type LogEntry = { at: number; who: Who; kind: LogKind; text: string; op?: 'R' | 'E' | 'W' | 'B' | 'X'; file?: string }
+export type LogEntry = { at: number; who: Who; kind: LogKind; text: string; /** A plain-language version of text (see brief.ts); the cards show it. */ brief?: string; op?: 'R' | 'E' | 'W' | 'B' | 'X'; file?: string }
 
 // WEB: an .html file Claude wrote or an Artifact it published; no frames, opens in the browser when clicked.
 export type MediaKind = 'IMG' | 'GIF' | 'VID' | '3D' | 'WEB'

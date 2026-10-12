@@ -9,6 +9,7 @@ import {
   applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
+import { briefTool } from './brief'
 import { parseGit, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
@@ -1395,8 +1396,9 @@ export const register: Register = on => {
       return { result: `checklist ${done}/${S.todos.length}`, text: `checklist ${done}/${S.todos.length}` } as never
     }
     const line = summary(e.tool, input)
+    const brief = briefTool(e.tool, input)
     const agent = S.agents.get(who)
-    if (agent) upsertAgent(S, { ...agent, doing: line })
+    if (agent) upsertAgent(S, { ...agent, doing: brief })
     if (e.tool === 'Bash') {
       startExec(S, {
         id: input.tool_use_id, who, command: String(input.command ?? ''), description: input.description as string | undefined,
@@ -1427,7 +1429,7 @@ export const register: Register = on => {
               x.exit = failed ? (exitCodeOf(ran.text) ?? 1) : 0
             }
           }
-          log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line, op: failed ? 'X' : 'B' })
+          log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line, brief, op: failed ? 'X' : 'B' })
           markFresh('exec')
           void refreshLocation($); void refreshProject($)
           if (!failed) for (const m of (await newMediaSince($, Math.floor(at / 1000) - 1)).filter(x => !isOwnScratch(x))) {
@@ -1441,7 +1443,7 @@ export const register: Register = on => {
           if (path && !failed && !isOwnScratch(path)) {
             touchFile(S, path, 'R', who, end)
             markFresh('files')
-            log(S, { at: end, who, kind: 'tool', text: line, op: 'R', file: path })
+            log(S, { at: end, who, kind: 'tool', text: line, brief, op: 'R', file: path })
           }
           break
         case 'Edit':
@@ -1452,7 +1454,7 @@ export const register: Register = on => {
             const created = e.tool === 'Write' && result.type === 'create'
             touchFile(S, path, created ? 'A' : 'M', who, end, patchLines(result.structuredPatch as never))
             markFresh('files')
-            log(S, { at: end, who, kind: 'tool', text: line, op: created ? 'W' : 'E', file: path })
+            log(S, { at: end, who, kind: 'tool', text: line, brief, op: created ? 'W' : 'E', file: path })
             if (/\.html?$/i.test(path) && !isOwnScratch(path)) addWeb(path, end)
             if (isMedia(path)) {
               const id = await addMedia($, path)
@@ -1473,7 +1475,7 @@ export const register: Register = on => {
           if (typeof input.taskId === 'string') applyTaskUpdate(S, input.taskId, input as never, who, end)
           break
         default:
-          log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line })
+          log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line, brief })
       }
     } catch {
       // A logging failure doesn't affect the tool's result.

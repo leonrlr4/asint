@@ -226,3 +226,13 @@ export function runsOf(row: Cell[]): Cell[] {
 
 export const SPRITE_COLS = W
 export const SPRITE_ROWS = H / 2
+
+const HAT: Record<Role, string> = {
+  main: '#f5d36b', explore: '#8a5a3c', plan: '#4f7fbf', general: '#f0c43a', guide: '#e8e4da', designer: '#c0394f', developer: '#3a3f48',
+  reviewer: '#6b7480', tester: '#7fd0e0', writer: '#3f9a62', security: '#2b2f38', scholar: '#3a3f48', other: BODY,
+}
+
+/** A two-cell head for the one-line rows of finished agents: the hat color over the body color. */
+export function miniOf(role: Role): Cell[] {
+  return [0, 1].map(() => ({ ch: '▀', fg: HAT[role], bg: BODY }))
+}
