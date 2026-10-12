@@ -1180,10 +1180,20 @@ const orchCount = (s: Session) => {
   return running ? t(`${running} 個在跑`, `${running} running`) : s.agents.size ? String(s.agents.size) : ''
 }
 
+/** A long path in a one-line summary keeps its last two parts: "Read /home/me/a/b/c/file.ts" becomes "Read …/c/file.ts". */
+const shortPaths = (text: string) => text.replace(/\/home\/[^/\s]+\//g, '~/').replace(/(?:\/[^\s/]+){3,}/g, m => `…/${m.split('/').slice(-2).join('/')}`)
+
+/** An unfinished-work bar: a short lit run sweeps along the track. The agents report no progress, so this only says "still going". */
+const sweepBar = (n: number, frame: number) => {
+  const lit = 4
+  const at = frame % (n + lit) - lit
+  return Array.from({ length: n }, (_, i) => (i >= at && i < at + lit ? '▰' : '▱')).join('')
+}
+
 /**
- * ORCH: MAIN and each subagent as a card with a pixel worker (a hat and a tool for its kind), what it was asked to do, how long
- * it has run and what it is doing now. Running first, then the finished by how recently they ended. A card opens on click to
- * show its latest steps and a button to send it a message.
+ * ORCH: MAIN and each subagent as a bordered card in a grid: a pixel worker (a hat and a tool for its kind) on the left; on the right the
+ * kind, what it was asked to do, how long it has run, and an animated bar while it works; under them what it is doing right now.
+ * Running first, then the finished by how recently they ended. A card opens on click to show its latest steps and a message button.
  */
 function orchTab(c: ViewCtx, maxRows: number) {
   const { el, s, p, ui, act, now, width } = c
@@ -1194,26 +1204,33 @@ function orchTab(c: ViewCtx, maxRows: number) {
   const done = subs.length - running - failed
   const frame = Math.floor(now / 300)
   const filesOf = (id: string) => [...s.files.values()].filter(f => f.by.includes(id)).length
-  const stepsOf = (id: string) => [...s.log].reverse().filter(e => e.who === id && e.kind !== 'turn').slice(0, 6)
+  // The Agent tool call is logged as a tool line and again as "Spawned"; the second one says more.
+  const stepsOf = (id: string) => [...s.log].reverse().filter(e => e.who === id && e.kind !== 'turn' && !(e.kind === 'tool' && /^Agent\b/.test(e.text))).slice(0, 6)
   const order = [...subs].sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || (b.endedAt ?? now) - (a.endedAt ?? now))
   type Card = { id: string; type: string; label: string; status: 'running' | 'done' | 'error' | 'idle'; startedAt?: number; endedAt?: number; doing?: string; model?: string }
   const main: Card = {
-    id: 'main', type: 'main', label: t('主 agent', 'Main agent'), status: s.vitals.turnRunning ? 'running' : 'idle',
-    startedAt: s.vitals.turnStartedAt, doing: [...s.log].reverse().find(e => e.who === 'main' && e.kind !== 'agent' && e.kind !== 'turn')?.text, model: s.vitals.model,
+    id: 'main', type: 'main', label: s.vitals.turnRunning ? t('主 agent，正在回應', 'Main agent, answering') : running ? t(`主 agent，等 ${running} 個 agent`, `Main agent, waiting for ${running}`) : t('主 agent', 'Main agent'),
+    status: s.vitals.turnRunning ? 'running' : 'idle', startedAt: s.vitals.turnStartedAt,
+    doing: [...s.log].reverse().find(e => e.who === 'main' && e.kind !== 'agent' && e.kind !== 'turn' && !(e.kind === 'tool' && /^Agent\b/.test(e.text)))?.text, model: s.vitals.model,
   }
   const cards: Card[] = [main, ...order.map(a => ({ id: a.id, type: a.type, label: a.label, status: a.status, startedAt: a.startedAt, endedAt: a.endedAt, doing: a.doing }))]
   const statusText = (x: Card['status']) => (x === 'running' ? t('執行中', 'Running') : x === 'done' ? t('完成', 'Done') : x === 'error' ? t('失敗', 'Failed') : t('閒置', 'Idle'))
   const statusColor = (x: Card['status']) => (x === 'running' ? p.success : x === 'error' ? p.error : x === 'done' ? p.muted : p.faint)
-  const infoW = Math.max(16, width - SPRITE_COLS - 3)
-  const cardRows = SPRITE_ROWS + 2
-  const visible = Math.max(1, Math.floor((maxRows - 2) / (cardRows + 1)))
-  const start = scrollAt(c, 'orch', cards.length - visible)
+  // As many columns of at least 46 cells as fit; one gap column between them.
+  const cols = Math.max(1, Math.floor((width + 1) / 47))
+  const cardW = Math.floor((width - (cols - 1)) / cols)
+  const innerW = cardW - 4
+  const infoW = Math.max(12, innerW - SPRITE_COLS - 2)
   const sprite = (x: Card) => {
     const mood = x.status === 'running' ? 'working' : x.status === 'error' ? 'failed' : x.status === 'done' ? 'done' : 'idle'
     return renderSprite(roleOf(x.type), mood, frame).map((row, i) => (
       <Text key={`sp-${x.id}-${i}`}>{runsOf(row).map((r, j) => <Text key={j} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
     ))
   }
+  const cardRows = SPRITE_ROWS + 3
+  const perRow = Math.max(1, Math.floor((maxRows - 3) / (cardRows + 1)))
+  const visible = perRow * cols
+  const start = scrollAt(c, 'orch', cards.length - visible)
   return (
     <Box flexDirection="column">
       <Box flexDirection="row" columnGap={2}>
@@ -1221,37 +1238,48 @@ function orchTab(c: ViewCtx, maxRows: number) {
         <Text color={p.muted}>{t('完成', 'Done')} {done}</Text>
         <Text color={failed ? p.error : p.faint}>{t('失敗', 'Failed')} {failed}</Text>
       </Box>
-      {cards.slice(start, start + visible).map(x => {
-        const open = ui.selAgent === x.id
-        const end = x.endedAt ?? now
-        const spin = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame % 10]
-        return (
-          <Box key={`oc-${x.id}`} flexDirection="column" marginTop={1}>
-            <Box flexDirection="row" columnGap={2}>
-              <Box width={SPRITE_COLS} flexShrink={0} flexDirection="column">{sprite(x)}</Box>
-              <Box flexDirection="column" width={infoW}>
-                <Box flexDirection="row" columnGap={1}>
-                  <Button key={`oc-t-${x.id}`} plain label={x.type === 'main' ? 'MAIN' : x.type} onPress={() => act.selAgent(x.id)} />
-                  <Text color={statusColor(x.status)} bold>{x.status === 'running' ? `${spin} ` : x.status === 'done' ? '✓ ' : x.status === 'error' ? '✗ ' : ''}{statusText(x.status)}</Text>
-                  {x.startedAt ? <Text color={p.muted}>{fmtDur((x.status === 'running' ? now : end) - x.startedAt)}</Text> : null}
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1} marginTop={1}>
+        {cards.slice(start, start + visible).map(x => {
+          const open = ui.selAgent === x.id
+          const end = x.endedAt ?? now
+          const border = x.status === 'running' ? mix(p.faint, p.success, 0.6) : x.status === 'error' ? p.error : p.faint
+          const files = filesOf(x.id)
+          return (
+            <Box key={`oc-${x.id}`} flexDirection="column" width={cardW} borderStyle="round" borderColor={ui.selAgent === x.id ? p.accent : border} paddingX={1}>
+              <Box flexDirection="row" columnGap={2}>
+                <Box width={SPRITE_COLS} flexShrink={0} flexDirection="column">{sprite(x)}</Box>
+                <Box flexDirection="column" width={infoW}>
+                  <Box flexDirection="row" columnGap={1}>
+                    <Button key={`oc-t-${x.id}`} plain label={clip(x.type === 'main' ? 'MAIN' : x.type, Math.max(6, infoW - 16))} onPress={() => act.selAgent(x.id)} />
+                    <Box flexGrow={1} />
+                    <Text color={statusColor(x.status)} bold>{statusText(x.status)}</Text>
+                  </Box>
+                  <Text color={p.base} wrap="truncate-end">{x.label}</Text>
+                  <Text color={p.faint} wrap="truncate-end">
+                    {[x.model, x.id === 'main' ? undefined : t(`${files} 個檔案`, files === 1 ? '1 file' : `${files} files`)].filter(Boolean).join(' · ')}
+                  </Text>
+                  <Box flexDirection="row" columnGap={1}>
+                    <Text color={x.status === 'running' ? p.success : x.status === 'error' ? p.error : p.faint}>
+                      {x.status === 'running' ? sweepBar(Math.max(6, infoW - 9), frame) : x.status === 'done' ? '▰'.repeat(Math.max(6, infoW - 9)) : x.status === 'error' ? '▰'.repeat(Math.max(6, infoW - 9)) : '▱'.repeat(Math.max(6, infoW - 9))}
+                    </Text>
+                    {x.startedAt ? <Text color={p.muted}>{fmtDur((x.status === 'running' ? now : end) - x.startedAt)}</Text> : null}
+                  </Box>
                 </Box>
-                <Text color={p.base} wrap="truncate-end">{x.label}</Text>
-                <Text color={p.faint} wrap="truncate-end">
-                  {[x.model, x.id === 'main' ? undefined : t(`${filesOf(x.id)} 檔`, `${filesOf(x.id)} files`)].filter(Boolean).join(' · ')}
-                </Text>
-                {x.status === 'running' && x.doing ? <Text color={p.accent} wrap="truncate-end">⏵ {x.doing}</Text> : <Text color={p.faint}>{' '}</Text>}
               </Box>
+              <Text color={x.status === 'running' ? p.accent : p.faint} wrap="truncate-end">
+                {x.status === 'running' && x.doing ? `⏵ ${shortPaths(x.doing)}` : x.status === 'idle' && x.doing ? `· ${shortPaths(x.doing)}` : ' '}
+              </Text>
+              {open ? (
+                <Box flexDirection="column">
+                  {stepsOf(x.id).length ? stepsOf(x.id).map((e, i) => <Text key={`os-${i}`} color={e.kind === 'error' ? p.error : p.muted} wrap="truncate-end">{fmtClock(e.at)} {shortPaths(e.text)}</Text>)
+                    : <Text color={p.faint}>{t('還沒有紀錄。', 'Nothing recorded yet.')}</Text>}
+                  <Button key={`oc-m-${x.id}`} plain dimColor label={`› ${t('傳訊息給它', 'Message it')}`} onPress={() => act.openMsg(x.id)} />
+                </Box>
+              ) : null}
             </Box>
-            {open ? (
-              <Box flexDirection="column" paddingLeft={SPRITE_COLS + 2}>
-                {stepsOf(x.id).length ? stepsOf(x.id).map((e, i) => <Text key={`os-${i}`} color={e.kind === 'error' ? p.error : p.muted} wrap="truncate-end">{fmtClock(e.at)} {e.text}</Text>)
-                  : <Text color={p.faint}>{t('還沒有紀錄。', 'Nothing recorded yet.')}</Text>}
-                <Button key={`oc-m-${x.id}`} plain dimColor label={t('✉ 傳訊息給它', '✉ Message it')} onPress={() => act.openMsg(x.id)} />
-              </Box>
-            ) : null}
-          </Box>
-        )
-      })}
+          )
+        })}
+      </Box>
       {cards.length > visible ? <Text color={p.faint}>{pos(start, visible, cards.length).trim()} · {t('滾輪捲動', 'scroll to see more')}</Text> : null}
     </Box>
   )
