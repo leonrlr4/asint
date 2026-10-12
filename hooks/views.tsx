@@ -63,6 +63,12 @@ export type UiState = {
   /** Folders the user closed although they hold changed files (those open by themselves), and the "only changed files" switch of the FILES tree. */
   treeShut: Record<string, true>
   treeChanged: boolean
+  /** Vim-style cursor of the FILES tree (a folder or a file, root-relative) and which side of FILES / CHANGES the keys act on. */
+  treeCur?: string
+  treeFocus: 'tree' | 'preview'
+  filesFocus: 'list' | 'preview'
+  /** Set by a keyboard move: the next draw scrolls the list so the cursor is in view. */
+  keepCursor?: boolean
 }
 
 export type Actions = {
@@ -76,6 +82,8 @@ export type Actions = {
   /** FILES: expand/collapse folders, select files. */
   treeToggle: (dir: string) => void
   toggleChanged: () => void
+  /** The vim keys of the FILES and CHANGES cards: h out, j down, k up, l in. */
+  vim: (panel: 'project' | 'files', key: 'h' | 'j' | 'k' | 'l') => void
   treeSelect: (path: string) => void
   toggleFollow: () => void
   /** ARCH: press a node (enters it if already selected and drillable), jump to breadcrumb level i, pan horizontally, open the full viewer in a browser. */
@@ -372,7 +380,7 @@ export function filesTab(c: ViewCtx, maxRows: number) {
     return (
       <Box flexDirection="column" width={width}>
         <Box flexDirection="row" columnGap={1}>
-          <Text color={p.accent} bold>{short(sel.path)}</Text>
+          <Text color={p.accent} bold>{ui.filesFocus === 'preview' ? '▎' : ''}{short(sel.path)}</Text>
           <Text color={p.muted}>{showDiff ? t('DIFF（本 session）', 'DIFF (this session)') : t('完整內容', 'Full file')}{pos(start, visible, lines.length)}</Text>
           {sel.diff.length ? <Button key="full" hotkey="d" plain dimColor label={ui.fullFile ? t('看 diff', 'Show diff') : t('看完整檔', 'Show full file')} onPress={act.toggleFull} /> : null}
           {hbar(c, 'files:detail', hx, hxMax, width, 'files')}
@@ -392,6 +400,13 @@ export function filesTab(c: ViewCtx, maxRows: number) {
   }
   const listView = (width: number, rows: number) => {
     const cc = { ...c, width }
+    const curIdx = list.findIndex(f => f.path === sel?.path)
+    if (ui.keepCursor && curIdx >= 0) {
+      const at = scrollAt(c, 'files', list.length - rows)
+      if (curIdx < at) ui.scroll.files = curIdx
+      else if (curIdx >= at + rows) ui.scroll.files = curIdx - rows + 1
+      ui.keepCursor = false
+    }
     const lstart = scrollAt(c, 'files', list.length - rows)
     return (
       <Box flexDirection="column">
@@ -800,18 +815,22 @@ export function treeRows(paths: readonly string[], open: Record<string, true>): 
 }
 
 /** FILES: the whole project tree. Click a folder to expand, a file to preview on the right; files touched this session are marked M/A/R. */
+/** The FILES tree's visible rows, shared by the drawing and by the keys (so a cursor move and the screen agree on what a row is). */
+export function projectRows(project: { root: string; paths: string[] }, files: Map<string, FileEntry>, git: GitState, livePath: string | undefined, ui: Pick<UiState, 'treeOpen' | 'treeShut' | 'treeChanged'>) {
+  const hotFiles = hotFilesOf(project.paths, project.root, files, git, livePath)
+  const hot = hotDirs(hotFiles)
+  // Folders holding something changed open by themselves unless the user closed them; "changed only" hides the rest.
+  const open: Record<string, true> = { ...ui.treeOpen }
+  for (const dir of hot.keys()) if (!ui.treeShut[dir]) open[dir] = true
+  return { rows: treeRows(ui.treeChanged ? hotFiles : project.paths, open), hot, hotFiles }
+}
+
 export function projectTab(c: ViewCtx, maxRows: number) {
   const { el, s, p, ui, act, project } = c
   const { Box, Text, Button, Code, Image } = el
   if (!project) return <Text color={p.muted}>{t('讀取專案檔案中…', 'Reading project files…')}</Text>
   const wide = isWide(c)
-  const hotFiles = hotFilesOf(project.paths, project.root, s.files, c.git, c.live?.path)
-  const hotSet = new Set(hotFiles)
-  const hot = hotDirs(hotFiles)
-  // Folders holding something changed open by themselves unless the user closed them; "changed only" hides the rest.
-  const open: Record<string, true> = { ...ui.treeOpen }
-  for (const dir of hot.keys()) if (!ui.treeShut[dir]) open[dir] = true
-  const rows = treeRows(ui.treeChanged ? hotFiles : project.paths, open)
+  const { rows, hot, hotFiles } = projectRows(project, s.files, c.git, c.live?.path, ui)
   const listRows = Math.max(3, (wide ? maxRows : Math.floor(maxRows * 0.45)) - 3)
   const touched = (rel: string) => s.files.get(`${project.root}/${rel}`)
   const tone = (x: Tone) => (x === 'accent' ? p.accent : x === 'success' ? p.success : x === 'warn' ? p.warn : x === 'error' ? p.error : x === 'muted' ? p.muted : p.faint)
@@ -819,6 +838,14 @@ export function projectTab(c: ViewCtx, maxRows: number) {
     k === 'editing' ? t('編輯中', 'editing') : k === 'new' ? t('新建', 'new') : k === 'edited' ? t('已改', 'edited') : k === 'read' ? t('只讀', 'read')
     : k === 'committed' ? t('已 commit', 'committed') : k === 'modified' ? t('有變更', 'changed') : t('未追蹤', 'untracked')
   const tree = (width: number) => {
+    const curPath = ui.treeCur ?? ui.treeSel
+    const curIdx = rows.findIndex(r => r.path === curPath)
+    if (ui.keepCursor && curIdx >= 0) {
+      const at = scrollAt(c, 'project', rows.length - listRows)
+      if (curIdx < at) ui.scroll.project = curIdx
+      else if (curIdx >= at + listRows) ui.scroll.project = curIdx - listRows + 1
+      ui.keepCursor = false
+    }
     const start = scrollAt(c, 'project', rows.length - listRows)
     const showTime = width >= 46
     return (
@@ -845,7 +872,7 @@ export function projectTab(c: ViewCtx, maxRows: number) {
               badge: badge?.text ?? '', badgeTone: badge?.tone ?? 'faint',
               chip: st ? label(st.kind) : '', tone: st?.tone ?? '', editing,
               time: showTime && !r.dir && f ? fmtClock(f.lastAt) : '',
-              count: r.dir ? hot.get(r.path) ?? 0 : 0, selected: !r.dir && r.path === ui.treeSel,
+              count: r.dir ? hot.get(r.path) ?? 0 : 0, selected: r.path === curPath,
               pick: `${r.dir ? 'dir' : 'file'}:${r.path}`,
             }} />
           )
@@ -867,7 +894,7 @@ export function projectTab(c: ViewCtx, maxRows: number) {
     return (
       <Box flexDirection="column" width={width}>
         <Box flexDirection="row" columnGap={1}>
-          <Text color={p.accent} bold>{rel}</Text>
+          <Text color={p.accent} bold>{ui.treeFocus === 'preview' ? '▎' : ''}{rel}</Text>
           {isMediaPath(rel) ? null : <Text color={p.muted}>{pos(start, visible, lines.length)}</Text>}
           {isMediaPath(rel) ? null : hbar(c, 'project:detail', hx, hxMax, width, 'project')}
           <Button key="tree-open" hotkey={c.oOwner === 'project' ? 'o' : undefined} plain dimColor label={t('外開', 'Open')} onPress={() => act.openExternal(abs)} />
@@ -1218,20 +1245,23 @@ function cellCard(c: ViewCtx, cell: Cell, k: number) {
   )
   // j and k scroll the card's main region: the detail side when it overflows, else the list. The sizes come from the previous draw.
   const more = (key: string) => (c.scrollMax.get(key) ?? 0) > 0
+  const vimPanel = active === 'project' || active === 'files'
   const scrollKey = more(`${active}:detail`) ? `${active}:detail` : more(active) ? active : undefined
   return (
     <Box key={`cell-${k}`} position="absolute" left={rect.x} top={rect.y} width={rect.w} height={rect.h}
       flexDirection="column" {...frame} paddingX={1} overflow="hidden">
       <Box flexDirection="row" columnGap={1}>
         {leaf.tabs.map(t => (
-          <Button key={`ct-${t}`} hotkey={PANEL_KEY[t]} plain dimColor={t !== active}
+          <Button key={`ct-${t}`} hotkey={t === 'log' && (c.current === 'project' || c.current === 'files') ? undefined : PANEL_KEY[t]} plain dimColor={t !== active}
             label={`${t === active ? '▣' : '▢'} ${PANEL_LABEL[t]}${c.fresh.includes(t) && t !== active ? ' •' : ''}`}
             onPress={() => act.focusPanel(t)} />
         ))}
         <Box flexGrow={1} />
         <Box flexShrink={1}><Text color={p.muted} wrap="truncate-end">{panelCount(s, active)}</Text></Box>
-        {scrollKey ? <Button key={`up-${active}`} hotkey={c.oOwner === active ? 'k' : undefined} plain dimColor label="▴" onPress={() => act.vpan(scrollKey, -5)} /> : null}
-        {scrollKey ? <Button key={`down-${active}`} hotkey={c.oOwner === active ? 'j' : undefined} plain dimColor label="▾" onPress={() => act.vpan(scrollKey, 5)} /> : null}
+        {vimPanel ? <Button key={`h-${active}`} hotkey={c.current === active ? 'h' : undefined} plain dimColor label="<" onPress={() => act.vim(active as 'project' | 'files', 'h')} /> : null}
+        {vimPanel ? <Button key={`l-${active}`} hotkey={c.current === active ? 'l' : undefined} plain dimColor label=">" onPress={() => act.vim(active as 'project' | 'files', 'l')} /> : null}
+        {vimPanel || scrollKey ? <Button key={`up-${active}`} hotkey={c.current === active ? 'k' : undefined} plain dimColor label="▴" onPress={() => (vimPanel ? act.vim(active as 'project' | 'files', 'k') : act.vpan(scrollKey!, -5))} /> : null}
+        {vimPanel || scrollKey ? <Button key={`down-${active}`} hotkey={c.current === active ? 'j' : undefined} plain dimColor label="▾" onPress={() => (vimPanel ? act.vim(active as 'project' | 'files', 'j') : act.vpan(scrollKey!, 5))} /> : null}
         {c.ui.zen
           ? <Button key="unzen" hotkey="z" plain label={t(' ⤢ 還原', ' ⤢ Restore')} onPress={() => act.zen()} />
           : <Button key={`zen-${active}`} plain dimColor label=" ⤢" onPress={() => act.zen(active)} />}

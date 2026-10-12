@@ -9,7 +9,7 @@ import {
   applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
-import { hotDirs, hotFilesOf, parseGit, type GitState } from './tree'
+import { parseGit, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
 import { type ArchNode, parseLikeC4 } from './arch'
@@ -17,7 +17,7 @@ import { pngSize } from './image'
 import { getLang, langFromLocale, setLang, t } from './i18n'
 import { LIVE_TOOLS, lineOf, type LiveEdit, readLive } from './live'
 import { cells, headWidth, imageTags, type Location, locationRow, type Picture, TILE_CHROME_ROWS, tiles } from './prompt'
-import { type ArchState, dashboard, treeRows, PANEL_KEY, PANEL_LABEL, panelArea, ratioFromDrag, DIVIDER, splitWidths, vitalsCompact, vitalsCompactText, WIDE, type Actions, type UiState, type ViewCtx } from './views'
+import { type ArchState, dashboard, treeRows, PANEL_KEY, PANEL_LABEL, panelArea, projectRows, ratioFromDrag, DIVIDER, splitWidths, vitalsCompact, vitalsCompactText, WIDE, type Actions, type UiState, type ViewCtx } from './views'
 
 // asint: a personal Claude Code interface. Every hook that uses $ lives in this file ($ cannot be passed
 // into other module files); views are in views.tsx, the Map in map.ts and data in model.ts, all pure functions that never touch $.
@@ -82,7 +82,7 @@ const ACTIVE_MS = 3000
 let S: Session = emptySession()
 const ui: UiState = {
   tab: 'files', mapView: 'combo', comboSlot: 0, fullFile: false, showReads: true, mediaFilter: 'ALL', scroll: {},
-  archTrail: [], archDirs: [], archPanX: 0, hx: {}, splitRatio: {}, treeShut: {}, treeChanged: false, treeOpen: {}, follow: true,
+  archTrail: [], archDirs: [], archPanX: 0, hx: {}, splitRatio: {}, treeShut: {}, treeChanged: false, treeFocus: 'tree', filesFocus: 'list', treeOpen: {}, follow: true,
 }
 const scrollMax = new Map<string, number>()
 // Last rendered pane size; wheel events use it to find the card under the pointer. Keyboard scrolling scrolls the card clicked last.
@@ -186,7 +186,7 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 const SESSIONS_DIR = '.cache/asint/sessions'
 const SAVE_DAYS = 14
 /** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'treeSel', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'treeSel', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -682,6 +682,68 @@ async function refreshGit($: EngineInterface) {
   }
 }
 
+// ── Vim keys in FILES and CHANGES ─────────────────────────────────────────
+// h out, j down, k up, l in. In the tree the cursor walks the rows (a folder opens with l, closes or jumps to its parent with h,
+// and l on a file moves into its preview, where j and k scroll and h comes back). CHANGES works the same on its file list.
+
+function treeCursor(row: { path: string; dir: boolean }) {
+  manualAt = Date.now()
+  ui.treeCur = row.path
+  ui.keepCursor = true
+  if (!row.dir) {
+    ui.treeSel = row.path
+    ui.scroll['project:detail'] = 0
+    ui.hx['project:detail'] = 0
+  }
+}
+
+function treeVim(key: 'h' | 'j' | 'k' | 'l') {
+  if (!project) return
+  if (ui.treeFocus === 'preview') {
+    if (key === 'h') ui.treeFocus = 'tree'
+    else if (key === 'j' || key === 'k') act.vpan('project:detail', key === 'j' ? 3 : -3)
+    return
+  }
+  const { rows } = projectRows(project, S.files, gitState, live?.path, ui)
+  if (!rows.length) return
+  const here = ui.treeCur ?? ui.treeSel
+  const idx = Math.max(0, rows.findIndex(r => r.path === here))
+  const row = rows[idx]!
+  if (key === 'j' || key === 'k') {
+    const next = rows[Math.min(rows.length - 1, Math.max(0, idx + (key === 'j' ? 1 : -1)))]!
+    treeCursor(next)
+  } else if (key === 'l') {
+    if (!row.dir) { treeCursor(row); ui.treeFocus = 'preview' }
+    else if (!row.open) act.treeToggle(row.path)
+    else if (rows[idx + 1] && rows[idx + 1]!.depth > row.depth) treeCursor(rows[idx + 1]!)
+  } else if (key === 'h') {
+    if (row.dir && row.open) act.treeToggle(row.path)
+    else {
+      const parent = [...rows.slice(0, idx)].reverse().find(r => r.dir && r.depth < row.depth)
+      if (parent) treeCursor(parent)
+    }
+  }
+}
+
+function filesVim(key: 'h' | 'j' | 'k' | 'l') {
+  if (ui.filesFocus === 'preview') {
+    if (key === 'h') ui.filesFocus = 'list'
+    else if (key === 'j' || key === 'k') act.vpan('files:detail', key === 'j' ? 3 : -3)
+    return
+  }
+  const list = [...S.files.values()].filter(f => ui.showReads || f.op !== 'R').sort((a, b) => b.lastAt - a.lastAt)
+  if (!list.length) return
+  const idx = Math.max(0, list.findIndex(f => f.path === ui.selFile))
+  if (key === 'j' || key === 'k') {
+    const next = list[Math.min(list.length - 1, Math.max(0, idx + (key === 'j' ? 1 : -1)))]!
+    ui.selFile = next.path
+    ui.fullFile = false
+    ui.hx['files:detail'] = 0
+    ui.scroll['files:detail'] = 0
+    ui.keepCursor = true
+  } else if (key === 'l') ui.filesFocus = 'preview'
+}
+
 // ── FILES follow mode ────────────────────────────────────
 
 // The file edit currently streaming, and the lines just changed that stay highlighted for a few seconds.
@@ -940,10 +1002,16 @@ function makeActions($: EngineInterface): Actions {
     treeToggle: dir => {
       lastPanel = 'project'
       // A folder holding changed files is open without being in treeOpen; closing it is remembered in treeShut.
-      const hot = project ? hotDirs(hotFilesOf(project.paths, project.root, S.files, gitState, live?.path)) : new Map<string, number>()
+      const hot = project ? projectRows(project, S.files, gitState, live?.path, ui).hot : new Map<string, number>()
       const isOpen = !!ui.treeOpen[dir] || (hot.has(dir) && !ui.treeShut[dir])
       if (isOpen) { delete ui.treeOpen[dir]; ui.treeShut[dir] = true }
       else { delete ui.treeShut[dir]; ui.treeOpen[dir] = true }
+      redraw()
+    },
+    vim: (panel, key) => {
+      lastPanel = panel
+      if (panel === 'project') treeVim(key)
+      else filesVim(key)
       redraw()
     },
     toggleChanged: () => { lastPanel = 'project'; ui.treeChanged = !ui.treeChanged; redraw() },

@@ -224,7 +224,8 @@ test('panel letters are hotkeys on the tab buttons, and zen keeps the keyboard o
     props: { title: 'ASINT', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 50 }, view: {} } } as never)
   for (const [panel, key] of Object.entries({ todo: 't', exec: 'e', files: 'c', project: 'f', arch: 'a', map: 'm', media: 'i', log: 'l' })) {
     const tab = await ui.find({ key: `ct-${panel}` })
-    if (tab) expect(tab.props.hotkey).toBe(key)
+    // While the keyboard is in FILES or CHANGES, l means "in" (vim), so the LOG tab gives its letter up.
+    if (tab) expect(tab.props.hotkey).toBe(panel === 'log' ? undefined : key)
   }
   // Re-opening the pane to resize it without focus hands the keyboard back to the prompt, and the next letter lands there.
   await ui.press({ key: 'zen-files' })
@@ -316,6 +317,7 @@ test('every scrollable card has ▼ and ▲ (j and k); FILES scrolls its preview
   await ui.press({ key: 'reads' })
   const first = async () => String((await ui.find({ type: 'Code' })).props.source).split('\n')[0]
   expect(await first()).toBe('line 1')
+  await ui.press({ key: 'l-files' })
   await ui.press({ key: 'down-files' })
   const down = await first()
   expect(down).not.toBe('line 1')
@@ -466,4 +468,40 @@ test('FILES tree: a file the agent edited gets a badge, a status and its folders
   expect(rows.find((r: any) => r.name === 'b.ts').chip).toBe('')
   expect(rows.find((r: any) => r.name === 'src').count).toBe(1)
   expect(rows.some((r: any) => r.name === 'x.md')).toBe(false)
+})
+
+test('vim keys in the FILES tree: j and k move the cursor, l opens a folder or goes into a file, h comes back out', async ($, on) => {
+  host(on, { opens: [], closes: [], ls: 'src/api/a.ts\nsrc/api/b.ts\nsrc/c.ts\nREADME.md\n' })
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await new Promise(r => setTimeout(r, 50))
+  const ui: any = await mount($)
+  await ui.press({ key: 'ct-project' })
+  await ui.press({ key: 'zen-project' })
+  const rows = async () => (await ui.findAll({ type: 'Client' })).filter((n: any) => String(n.props?.module).endsWith('treerow.tsx')).map((n: any) => n.props.props)
+  const cursor = async () => (await rows()).find((r: any) => r.selected)?.name
+  const names = async () => (await rows()).map((r: any) => r.name)
+  expect(await names()).toEqual(['src', 'README.md'])
+  await ui.press({ key: 'down-project' })
+  await ui.press({ key: 'down-project' })
+  expect(await cursor()).toBe('README.md')
+  await ui.press({ key: 'up-project' })
+  expect(await cursor()).toBe('src')
+  await ui.press({ key: 'l-project' })
+  expect(await names()).toEqual(['src', 'api', 'c.ts', 'README.md'])
+  await ui.press({ key: 'l-project' })
+  expect(await cursor()).toBe('api')
+  await ui.press({ key: 'l-project' })
+  expect(await names()).toEqual(['src', 'api', 'a.ts', 'b.ts', 'c.ts', 'README.md'])
+  await ui.press({ key: 'down-project' })
+  expect(await cursor()).toBe('a.ts')
+  await ui.press({ key: 'l-project' })
+  await ui.press({ key: 'down-project' })
+  expect(await cursor()).toBe('a.ts')
+  await ui.press({ key: 'h-project' })
+  await ui.press({ key: 'down-project' })
+  expect(await cursor()).toBe('b.ts')
+  await ui.press({ key: 'h-project' })
+  expect(await cursor()).toBe('api')
+  await ui.press({ key: 'h-project' })
+  expect(await names()).toEqual(['src', 'api', 'c.ts', 'README.md'])
 })
