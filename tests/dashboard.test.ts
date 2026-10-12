@@ -3,7 +3,7 @@ import { test, expect } from 'claude-code/testing'
 import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '../hooks/views'
 import { filesVim, treeVim } from '../hooks/vim'
 import { badgeOf, hotDirs, hotFilesOf, isHot, parseGit, statusOf } from '../hooks/tree'
-import { changesList, emptySession, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
+import { changesList, emptySession, endAgentFromNotification, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
 
 const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -665,4 +665,18 @@ test('the tree client holds the keys: gg and G jump, Enter goes in, a / search f
   expect((await rows()).map((r: any) => r.name)).toEqual(['a', 'one.ts', 'two.ts', 'b', 'z'])
   await key('/'); await key('t'); await key('h'); await key('r'); await key('return')
   expect(await cursor()).toBe('three.ts')
+})
+
+test('a task notification ends the agent it names, and only if that agent still shows as running', () => {
+  const s = emptySession()
+  s.agents.set('a1', { id: 'a1', label: 'job', type: 'Explore', startedAt: 1000, status: 'running', doing: 'Reading x' })
+  s.agents.set('a2', { id: 'a2', label: 'old', type: 'Plan', startedAt: 1000, endedAt: 1500, status: 'done' })
+  const note = (id: string, status: string) => `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>`
+  expect(endAgentFromNotification(s, note('a2', 'completed'), 9000)).toBe(false)
+  expect(endAgentFromNotification(s, note('zzz', 'completed'), 9000)).toBe(false)
+  expect(endAgentFromNotification(s, note('a1', 'killed'), 9000)).toBe(true)
+  expect(s.agents.get('a1')!.status).toBe('error')
+  expect(s.agents.get('a1')!.endedAt).toBe(9000)
+  expect(s.agents.get('a1')!.doing).toBeUndefined()
+  expect(s.agents.get('a2')!.endedAt).toBe(1500)
 })

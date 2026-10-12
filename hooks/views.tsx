@@ -1241,7 +1241,7 @@ function orchTab(c: ViewCtx, maxRows: number) {
     status: s.vitals.turnRunning ? 'running' : 'idle', startedAt: s.vitals.turnStartedAt,
     doing: [...s.log].reverse().find(e => e.who === 'main' && e.kind !== 'agent' && e.kind !== 'turn' && !(e.kind === 'tool' && /^Agent\b/.test(e.text)))?.text, model: s.vitals.model,
   }
-  const cards: Card[] = [main, ...order.map(a => ({ id: a.id, type: a.type, label: a.label, status: a.status, startedAt: a.startedAt, endedAt: a.endedAt, doing: a.doing }))]
+  const cards: Card[] = [main, ...order.map(a => ({ id: a.id, type: a.type, label: a.label, status: a.status, startedAt: a.startedAt, endedAt: a.endedAt, doing: a.doing, model: a.model }))]
   const statusText = (x: Card['status']) => (x === 'running' ? t('執行中', 'Running') : x === 'done' ? t('完成', 'Done') : x === 'error' ? t('失敗', 'Failed') : t('閒置', 'Idle'))
   const statusColor = (x: Card['status']) => (x === 'running' ? p.success : x === 'error' ? p.error : x === 'done' ? p.muted : p.faint)
   // Running agents get a full card with their worker; the finished ones shrink to one line each below, so the room goes to what is moving.

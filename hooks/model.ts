@@ -42,6 +42,8 @@ export type Agent = {
   status: 'running' | 'done' | 'error'
   /** What it is doing now (a one-line summary of the latest tool call). */
   doing?: string
+  /** The model it was started with, when the spawn named one. */
+  model?: string
 }
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
@@ -300,4 +302,18 @@ export function changesList(s: Session, opts: { showReads: boolean; by?: string 
   return [...s.files.values()]
     .filter(f => (opts.showReads || f.op !== 'R') && (!opts.by || f.by.includes(opts.by)))
     .sort((a, b) => b.lastAt - a.lastAt)
+}
+
+/**
+ * A <task-notification> message says a background task ended: when its id is an agent that still shows as running, it is done (or
+ * failed). A foreground agent that was interrupted never reports a turn end, so this is the only word that it is over.
+ * Returns true when an agent changed.
+ */
+export function endAgentFromNotification(s: Session, text: string, now: number): boolean {
+  const id = /<task-id>([^<]+)<\/task-id>/.exec(text)?.[1]
+  const status = /<status>([^<]+)<\/status>/.exec(text)?.[1]
+  const a = id ? s.agents.get(id) : undefined
+  if (!a || a.status !== 'running') return false
+  upsertAgent(s, { ...a, status: status === 'completed' ? 'done' : 'error', endedAt: now, doing: undefined })
+  return true
 }

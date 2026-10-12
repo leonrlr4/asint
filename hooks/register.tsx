@@ -6,7 +6,7 @@ import type { Palette, Skin } from '../types'
 import { Canvas } from './canvas'
 import { draw } from './map'
 import {
-  applyTaskCreate, applyTaskUpdate, applyTodoWrite, changesList, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
+  applyTaskCreate, applyTaskUpdate, applyTodoWrite, changesList, emptySession, endAgentFromNotification, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
 import { briefTool } from './brief'
@@ -1379,7 +1379,7 @@ export const register: Register = on => {
     const r = await next(e)
     if (r.agentId) {
       const now = await $.clock.now()
-      upsertAgent(S, { id: r.agentId, label: e.name ?? e.description ?? e.subagentType, type: e.subagentType, startedAt: now, status: 'running' })
+      upsertAgent(S, { id: r.agentId, label: e.name ?? e.description ?? e.subagentType, type: e.subagentType, startedAt: now, status: 'running', model: e.model })
       log(S, { at: now, who: e.parentAgentId ?? 'main', kind: 'agent', text: t(`派出 ${e.subagentType}：${e.description}`, `Spawned ${e.subagentType}: ${e.description}`) })
       $.ui.invalidate('ui.render')
     }
@@ -1392,6 +1392,7 @@ export const register: Register = on => {
       if (b.type !== 'text' || typeof b.text !== 'string' || !b.text.includes('<task-notification>')) continue
       const id = /<task-id>([^<]+)<\/task-id>/.exec(b.text)?.[1]
       const status = /<status>([^<]+)<\/status>/.exec(b.text)?.[1]
+      if (endAgentFromNotification(S, b.text, Date.now())) $.ui.invalidate('ui.render')
       const x = id ? S.execs.find(y => y.outputPath?.endsWith(`/${id}.output`)) : undefined
       if (x && x.status === 'background') {
         x.status = status === 'completed' ? 'ok' : 'error'
