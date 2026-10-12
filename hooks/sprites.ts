@@ -232,7 +232,26 @@ const HAT: Record<Role, string> = {
   reviewer: '#6b7480', tester: '#7fd0e0', writer: '#3f9a62', security: '#2b2f38', scholar: '#3a3f48', other: BODY,
 }
 
-/** A two-cell head for the one-line rows of finished agents: the hat color over the body color. */
-export function miniOf(role: Role): Cell[] {
-  return [0, 1].map(() => ({ ch: '▀', fg: HAT[role], bg: BODY }))
+/** A 6 x 4 pixel head (6 cells, 2 rows of text) for the rows of finished agents: the hat of its role over the same face as the big one. */
+export function miniOf(role: Role, mood: Mood = 'done'): Cell[][] {
+  const hat = HAT[role]
+  const face = mood === 'failed' ? ['oxooxo', 'oooooo'] : ['oeooeo', 'oooooo']
+  const px = [`.${'h'.repeat(4)}.`, ...face, 'o.oo.o']
+  const color = (ch: string | undefined) => (ch === 'h' ? hat : ch === 'e' || ch === 'x' ? EYE : ch === 'o' ? BODY : undefined)
+  const rows: Cell[][] = []
+  for (let y = 0; y < 4; y += 2) {
+    const row: Cell[] = []
+    for (let x = 0; x < 6; x++) {
+      const top = color(px[y]![x])
+      const bottom = color(px[y + 1]![x])
+      if (top && bottom) row.push(top === bottom ? { ch: '█', fg: top } : { ch: '▀', fg: top, bg: bottom })
+      else if (top) row.push({ ch: '▀', fg: top })
+      else if (bottom) row.push({ ch: '▄', fg: bottom })
+      else row.push({ ch: ' ' })
+    }
+    rows.push(row)
+  }
+  return rows
 }
+
+export const MINI_COLS = 6

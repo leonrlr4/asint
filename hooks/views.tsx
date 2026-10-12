@@ -9,7 +9,7 @@ import { agentSpots, agentsOf, type MapView } from './map'
 
 import { changesList, type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
 import { mix } from './palette'
-import { miniOf, renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from './sprites'
+import { MINI_COLS, miniOf, renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from './sprites'
 import { badgeOf, hotDirs, hotFilesOf, statusOf, type GitState, type StatusKind, type Tone } from './tree'
 import { getLang, t } from './i18n'
 
@@ -1239,7 +1239,8 @@ function orchTab(c: ViewCtx, maxRows: number) {
   const main: Card = {
     id: 'main', type: 'main', label: s.vitals.turnRunning ? t('主 agent，正在回應', 'Main agent, answering') : running ? t(`主 agent，等 ${running} 個 agent`, `Main agent, waiting for ${running}`) : t('主 agent', 'Main agent'),
     status: s.vitals.turnRunning ? 'running' : 'idle', startedAt: s.vitals.turnStartedAt,
-    doing: [...s.log].reverse().find(e => e.who === 'main' && e.kind !== 'agent' && e.kind !== 'turn' && !(e.kind === 'tool' && /^Agent\b/.test(e.text)))?.text, model: s.vitals.model,
+    doing: (() => { const e = [...s.log].reverse().find(y => y.who === 'main' && y.kind !== 'agent' && y.kind !== 'turn' && !(y.kind === 'tool' && /^Agent\b/.test(y.text))); return e ? e.brief ?? shortPaths(e.text) : undefined })(),
+    model: s.vitals.model,
   }
   const cards: Card[] = [main, ...order.map(a => ({ id: a.id, type: a.type, label: a.label, status: a.status, startedAt: a.startedAt, endedAt: a.endedAt, doing: a.doing, model: a.model }))]
   const statusText = (x: Card['status']) => (x === 'running' ? t('執行中', 'Running') : x === 'done' ? t('完成', 'Done') : x === 'error' ? t('失敗', 'Failed') : t('閒置', 'Idle'))
@@ -1306,22 +1307,32 @@ function orchTab(c: ViewCtx, maxRows: number) {
           )
         })}
       </Box>
-      {past.length ? <Text color={p.faint}>{t('已結束', 'Finished')} {past.length}</Text> : null}
+      {past.length ? <Box marginTop={1}><Text color={p.faint}>{t('已結束', 'Finished')} {past.length}</Text></Box> : null}
       {past.map(x => {
         const files = filesOf(x.id)
         const dur = x.startedAt ? fmtDur((x.endedAt ?? now) - x.startedAt) : ''
         const bad = x.status === 'error'
+        const head = miniOf(roleOf(x.type), bad ? 'failed' : 'done').map((row, i) => (
+          <Text key={`mh-${x.id}-${i}`}>{runsOf(row).map((r, k) => <Text key={k} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
+        ))
         return (
-          <Box key={`op-${x.id}`} flexDirection="column">
+          <Box key={`op-${x.id}`} flexDirection="column" marginTop={1}>
             <Box flexDirection="row" columnGap={1}>
-              <Text>{runsOf(miniOf(roleOf(x.type))).map((r, j) => <Text key={j} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
-              <Box width={14} flexShrink={0}><Button key={`op-t-${x.id}`} plain dimColor={ui.selAgent !== x.id} label={clip(x.type, 13)} onPress={() => act.selAgent(x.id)} /></Box>
-              <Box flexGrow={1} flexShrink={1}><Text color={bad ? p.error : p.muted} wrap="truncate-end">{x.label}</Text></Box>
-              <Text color={p.faint}>{files ? (files === 1 ? t('1 檔', '1 file') : t(`${files} 檔`, `${files} files`)) : ''}</Text>
-              <Text color={p.faint}>{dur.padStart(6)}</Text>
-              <Text color={bad ? p.error : p.success} bold>{bad ? '✗' : '✓'}</Text>
+              <Box width={MINI_COLS} flexShrink={0} flexDirection="column">{head}</Box>
+              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                <Box flexDirection="row" columnGap={1}>
+                  <Button key={`op-t-${x.id}`} plain dimColor={ui.selAgent !== x.id} label={clip(x.type, Math.max(8, width - 26))} onPress={() => act.selAgent(x.id)} />
+                  <Box flexGrow={1} />
+                  <Text color={p.faint}>{dur}</Text>
+                  <Text color={bad ? p.error : p.success} bold>{bad ? '✗' : '✓'}</Text>
+                </Box>
+                <Box flexDirection="row" columnGap={1}>
+                  <Box flexGrow={1} flexShrink={1}><Text color={bad ? p.error : p.muted} wrap="truncate-end">{x.label}</Text></Box>
+                  <Text color={p.faint}>{files ? (files === 1 ? t('1 檔', '1 file') : t(`${files} 檔`, `${files} files`)) : ''}</Text>
+                </Box>
+              </Box>
             </Box>
-            {ui.selAgent === x.id ? steps(x, 3) : null}
+            {ui.selAgent === x.id ? steps(x, MINI_COLS + 1) : null}
           </Box>
         )
       })}
