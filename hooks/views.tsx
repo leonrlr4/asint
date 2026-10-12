@@ -818,7 +818,6 @@ export function projectTab(c: ViewCtx, maxRows: number) {
   const label = (k: StatusKind) =>
     k === 'editing' ? t('編輯中', 'editing') : k === 'new' ? t('新建', 'new') : k === 'edited' ? t('已改', 'edited') : k === 'read' ? t('只讀', 'read')
     : k === 'committed' ? t('已 commit', 'committed') : k === 'modified' ? t('有變更', 'changed') : t('未追蹤', 'untracked')
-  const spin = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][Math.floor(c.now / 100) % 10]
   const tree = (width: number) => {
     const start = scrollAt(c, 'project', rows.length - listRows)
     const showTime = width >= 46
@@ -837,29 +836,18 @@ export function projectTab(c: ViewCtx, maxRows: number) {
         {!rows.length ? <Text color={p.muted}>{t('這個 session 還沒有動過的檔案。', 'No files changed in this session yet.')}</Text> : null}
         {rows.slice(start, start + listRows).map(r => {
           const f = r.dir ? undefined : touched(r.path)
-          const isSel = !r.dir && r.path === ui.treeSel
           const editing = !r.dir && c.live?.path === `${project.root}/${r.path}`
           const st = r.dir ? undefined : statusOf(f, c.git.get(r.path), editing)
-          const count = r.dir ? hot.get(r.path) : undefined
           const badge = r.dir ? undefined : badgeOf(r.name)
-          const chip = st ? `${st.kind === 'editing' ? `${spin} ` : ''}${label(st.kind)}` : ''
-          const timeW = showTime ? 9 : 0
-          const nameW = Math.max(6, width - r.depth * 2 - 3 - (chip ? chip.length + 1 : 0) - (count ? 4 : 0) - timeW)
           return (
-            <Box key={`tr-${r.path}`} flexDirection="row" backgroundColor={isSel ? p.surface : st?.kind === 'editing' ? mix(p.bg, p.accent, 0.12) : undefined}>
-              <Text>{'  '.repeat(r.depth)}</Text>
-              {r.dir
-                ? <Text color={count ? p.accent : p.faint}>{r.open ? '▾' : '▸'} </Text>
-                : <Text color={tone(badge!.tone)} bold>{badge!.text} </Text>}
-              <Box flexGrow={1} flexShrink={1}>
-                <Button key={`tb-${r.path}`} plain dimColor={!r.dir && !st && !isSel}
-                  label={clip(r.dir ? `${r.name}/` : r.name, nameW)}
-                  onPress={() => (r.dir ? act.treeToggle(r.path) : act.treeSelect(r.path))} />
-              </Box>
-              {count ? <Text color={p.accent}> {count}</Text> : null}
-              {st ? <Text color={tone(st.tone)} bold={st.kind === 'editing'}> {chip}</Text> : null}
-              {showTime && !r.dir ? <Text color={p.faint}> {f ? fmtClock(f.lastAt) : ''.padStart(8)}</Text> : null}
-            </Box>
+            <el.Client key={`tr-${r.path}`} module="./treerow.tsx" width={width} props={{
+              palette: p, width, depth: r.depth, dir: r.dir, open: r.open, name: r.name,
+              badge: badge?.text ?? '', badgeTone: badge?.tone ?? 'faint',
+              chip: st ? label(st.kind) : '', tone: st?.tone ?? '', editing,
+              time: showTime && !r.dir && f ? fmtClock(f.lastAt) : '',
+              count: r.dir ? hot.get(r.path) ?? 0 : 0, selected: !r.dir && r.path === ui.treeSel,
+              pick: `${r.dir ? 'dir' : 'file'}:${r.path}`,
+            }} />
           )
         })}
         {rows.length > listRows ? <Text color={p.faint}>{pos(start, listRows, rows.length).trim()} · {t('滾輪捲動', 'scroll to see more')}</Text> : null}

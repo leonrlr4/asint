@@ -1176,6 +1176,8 @@ export const register: Register = on => {
       const [kind, ...rest] = data.pick.split(':')
       const id = rest.join(':')
       if (kind === 'exec') { lastPanel = 'exec'; ui.selExec = id }
+      else if (kind === 'file') act.treeSelect(id)
+      else if (kind === 'dir') act.treeToggle(id)
       else if (kind === 'todo') { lastPanel = 'todo'; ui.selTodo = id; ui.selStep = undefined; ui.scroll['todo:detail'] = 0 }
       $.ui.invalidate('ui.render')
       if (!paneFocused) void $.ui.open({ id: PANE, title: paneTitle(), focus: true, ...(requestedCols ? { columns: requestedCols } : {}) }).catch(() => undefined)
