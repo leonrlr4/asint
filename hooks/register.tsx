@@ -188,7 +188,7 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 const SESSIONS_DIR = '.cache/asint/sessions'
 const SAVE_DAYS = 14
 /** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'treeSel', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'treeSel', 'treeRoot', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -632,6 +632,7 @@ let project: ViewCtx['project']
 let projectBusy = false
 /** What git says about the project's files, and when the session's first event happened (commits before it do not count as "committed"). */
 let gitState: GitState = new Map()
+let suggestRoot: string | undefined
 let gitBusy = false
 let sessionSince = Date.now()
 let treeCache: { key: string; text?: string } = { key: '' }
@@ -641,7 +642,7 @@ async function refreshProject($: EngineInterface) {
   if (projectBusy) return
   projectBusy = true
   try {
-    const cwd = await $.session.cwd()
+    const cwd = ui.treeRoot ?? await $.session.cwd()
     const top = await $.process.run(['git', '-C', cwd, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 }).catch(() => undefined)
     const root = top && top.exitCode === 0 ? top.stdout.trim() : cwd
     const r = top && top.exitCode === 0
@@ -760,6 +761,18 @@ const FLASH_MS = 3000
 // Stream chunks can arrive dozens per second; redraw at most every 80 ms.
 const LIVE_FRAME_MS = 80
 let manualAt = 0
+
+/** An edit landed outside the folder FILES shows: find that file's git folder and offer it as a switch (never switches by itself). */
+async function suggestRootFor($: EngineInterface, abs: string) {
+  if (!project || abs.startsWith(`${project.root}/`)) return
+  const dir = abs.slice(0, abs.lastIndexOf('/'))
+  const top = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 }).catch(() => undefined)
+  const root = top && top.exitCode === 0 ? top.stdout.trim() : undefined
+  if (root && root !== project.root && root !== suggestRoot) {
+    suggestRoot = root
+    $.ui.invalidate('ui.render')
+  }
+}
 
 /** Jump FILES to this file: expand its folders, select it, scroll it into view and switch its cell to the FILES tab. */
 function followTo(abs: string) {
@@ -1018,6 +1031,16 @@ function makeActions($: EngineInterface): Actions {
       else filesVim(key)
       redraw()
     },
+    setRoot: dir => {
+      lastPanel = 'project'
+      ui.treeRoot = dir
+      suggestRoot = undefined
+      project = undefined
+      gitState = new Map()
+      ui.treeOpen = {}; ui.treeShut = {}; ui.treeSel = undefined; ui.treeCur = undefined
+      redraw()
+      void refreshProject($)
+    },
     toggleChanged: () => { lastPanel = 'project'; ui.treeChanged = !ui.treeChanged; redraw() },
     toggleFollow: () => { ui.follow = !ui.follow; redraw() },
     treeSelect: path => {
@@ -1113,7 +1136,7 @@ export const register: Register = on => {
         required: ['todos'],
       },
     }).catch(() => undefined)
-    await $.command.register({ name: 'asint', description: t('打開 asint 儀表板；/asint edit 編輯版面、/asint reset 還原、/asint arch 檢查或建立架構圖', 'Open the asint dashboard; /asint edit to edit the layout, /asint reset to restore it, /asint arch to check or create the architecture diagram') })
+    await $.command.register({ name: 'asint', description: t('打開 asint 儀表板；/asint edit 編輯版面、/asint root <資料夾> 換 FILES 的資料夾、/asint reset 還原、/asint arch 檢查或建立架構圖', 'Open the asint dashboard; /asint edit to edit the layout, /asint reset to restore it, /asint arch to check or create the architecture diagram') })
     await $.command.register({ name: 'html', description: t('打開網頁：/html <路徑或網址> 在終端機旁邊；/html -b <…> 用 Brave', 'Open a web page: /html <path or URL> beside the terminal; /html -b <…> in Brave') })
 
     S = emptySession()
@@ -1173,6 +1196,12 @@ export const register: Register = on => {
       // A slash-command hook can't call prompt.submit (it would wait on the turn it is holding); the next tick sends it.
       archInitPending = true
       return { text: t('已請 agent 檢查架構圖：沒有就建立，有就對照程式碼補齊', 'Asked the agent to check the architecture diagram: create it if missing, bring it in line with the code otherwise') }
+    }
+    if (arg === 'root' || arg.startsWith('root ')) {
+      const want = arg.slice(4).trim()
+      const home = (await $.env.get('HOME')) ?? ''
+      act?.setRoot(want ? want.replace(/^~(?=\/|$)/, home) : undefined)
+      return { text: want ? t(`FILES 改看 ${want}`, `FILES now shows ${want}`) : t('FILES 回到 session 的資料夾', 'FILES is back on the session folder') }
     }
     if (arg === 'reset') {
       await saveLayout($, DEFAULT_LAYOUT)
@@ -1318,7 +1347,7 @@ export const register: Register = on => {
             const next2 = readLive(call.name, call.id, e.agentId ?? 'main', call.json)
             const isNewPath = next2.path && live?.path !== next2.path
             live = next2
-            if (isNewPath && next2.path) followTo(next2.path)
+            if (isNewPath && next2.path) { followTo(next2.path); void suggestRootFor($, next2.path) }
             liveFrame($, !!isNewPath)
           }
         }
@@ -1573,7 +1602,7 @@ export const register: Register = on => {
     }
     for (const t of PANELS) if (isShown(shown(), t)) fresh.delete(t)
 
-    const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, git: gitState, treeText, treePreview, live, flash,
+    const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, git: gitState, suggestRoot, treeText, treePreview, live, flash,
       oOwner: oOwner(), current: paneFocused ? (ui.zen ?? (isShown(shown(), lastPanel) ? lastPanel : undefined)) : undefined }
     try {
       return dashboard(ctx, shown())

@@ -68,6 +68,8 @@ export type UiState = {
   treeChanged: boolean
   /** Vim-style cursor of the FILES tree (a folder or a file, root-relative) and which side of FILES / CHANGES the keys act on. */
   treeCur?: string
+  /** The folder the FILES tree shows instead of the session's own, set by /asint root or the switch button. */
+  treeRoot?: string
   treeFocus: 'tree' | 'preview'
   filesFocus: 'list' | 'preview'
   /** Set by a keyboard move: the next draw scrolls the list so the cursor is in view. */
@@ -85,6 +87,8 @@ export type Actions = {
   /** FILES: expand/collapse folders, select files. */
   treeToggle: (dir: string) => void
   toggleChanged: () => void
+  /** Show another folder in the FILES tree; undefined goes back to the session's own. */
+  setRoot: (dir: string | undefined) => void
   /** The vim keys of the FILES and CHANGES cards: h out, j down, k up, l in. */
   vim: (panel: 'project' | 'files', key: 'h' | 'j' | 'k' | 'l') => void
   treeSelect: (path: string) => void
@@ -156,6 +160,8 @@ export type ViewCtx = {
   project?: { root: string; paths: string[]; truncated: boolean }
   /** What git says about each project file (root-relative); empty outside a repository. */
   git: GitState
+  /** A git folder the agent is editing in that FILES does not show yet. */
+  suggestRoot?: string
   treeText?: string
   treePreview?: { path: string; frame: string; width: number; height: number }
   /** FILES follow mode: the edit call being streamed; the lines just changed (0-based, inclusive), highlighted for a few seconds. */
@@ -863,7 +869,14 @@ export function projectTab(c: ViewCtx, maxRows: number) {
         <Box flexDirection="row" columnGap={1}>
           <Button key="changed" plain dimColor={!ui.treeChanged} label={ui.treeChanged ? t('● 只看動過的', '● Changed only') : t('○ 只看動過的', '○ Changed only')} onPress={act.toggleChanged} />
           <Text color={p.faint}>{hotFiles.length ? t(`${hotFiles.length} 個動過`, `${hotFiles.length} changed`) : ''}</Text>
+          {ui.treeRoot ? <Button key="root-reset" plain dimColor label={t('⌂ 回到 session 資料夾', '⌂ Back to the session folder')} onPress={() => act.setRoot(undefined)} /> : null}
         </Box>
+        {c.suggestRoot && c.suggestRoot !== project.root ? (
+          <Box flexDirection="row" columnGap={1}>
+            <Text color={p.warn}>{t('正在改這個資料夾外的檔案', 'Editing outside this tree')}</Text>
+            <Button key="root-suggest" plain label={`→ ${clip(short(c.suggestRoot), Math.max(10, width - 36))}`} onPress={() => act.setRoot(c.suggestRoot)} />
+          </Box>
+        ) : null}
         {!rows.length ? <Text color={p.muted}>{t('這個 session 還沒有動過的檔案。', 'No files changed in this session yet.')}</Text> : null}
         {rows.slice(start, start + listRows).map(r => {
           const f = r.dir ? undefined : touched(r.path)

@@ -565,3 +565,12 @@ test('ORCH: a resumed session shows each agent as a card with its kind and task,
   await ui.press({ key: 'op-t-a2' })
   expect(await texts(ui)).not.toContain('…/c/file.ts')
 })
+
+test('/asint root changes the folder FILES shows and /asint root with nothing goes back', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  const set: any = await $.command.run({ command: 'asint', args: 'root ~/Projects/asint' } as never)
+  expect(set.text).toContain('Projects/asint')
+  const back: any = await $.command.run({ command: 'asint', args: 'root' } as never)
+  expect(back.text).toContain('back')
+})
