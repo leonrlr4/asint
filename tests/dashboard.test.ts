@@ -459,7 +459,7 @@ test('FILES tree: a file the agent edited gets a badge, a status and its folders
   const ui: any = await mount($)
   await ui.press({ key: 'ct-project' })
   await ui.press({ key: 'zen-project' })
-  const rowsOf = async () => (await ui.findAll({ type: 'Client' })).filter((n: any) => String(n.props?.module).endsWith('treerow.tsx')).map((n: any) => n.props.props)
+  const rowsOf = async () => (await ui.findAll({ type: 'Client' })).filter((n: any) => String(n.props?.module).endsWith('filetree.tsx')).flatMap((n: any) => n.props.props.rows)
   const rows = await rowsOf()
   const file = rows.find((r: any) => r.name === 'a.ts')
   expect(file.badge).toBe('TS')
@@ -478,7 +478,7 @@ test('vim keys in the FILES tree: j and k move the cursor, l opens a folder or g
   const ui: any = await mount($)
   await ui.press({ key: 'ct-project' })
   await ui.press({ key: 'zen-project' })
-  const rows = async () => (await ui.findAll({ type: 'Client' })).filter((n: any) => String(n.props?.module).endsWith('treerow.tsx')).map((n: any) => n.props.props)
+  const rows = async () => (await ui.findAll({ type: 'Client' })).filter((n: any) => String(n.props?.module).endsWith('filetree.tsx')).flatMap((n: any) => n.props.props.rows)
   const cursor = async () => (await rows()).find((r: any) => r.selected)?.name
   const names = async () => (await rows()).map((r: any) => r.name)
   expect(await names()).toEqual(['src', 'README.md'])
@@ -645,4 +645,24 @@ test('vim keys as pure functions: top, bottom, half pages, Enter and the preview
   filesVim('enter', list, fui)
   expect(fui.filesFocus).toBe('preview')
   expect(filesVim('top', list, fui)).toEqual({ vpan: ['files:detail', -1e6] })
+})
+
+test('the tree client holds the keys: gg and G jump, Enter goes in, a / search finds a name and n goes on', async ($, on) => {
+  host(on, { opens: [], closes: [], ls: 'a/one.ts\na/two.ts\nb/three.ts\nz/last.ts\n' })
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await new Promise(r => setTimeout(r, 50))
+  const ui: any = await mount($)
+  await ui.press({ key: 'ct-project' })
+  await ui.press({ key: 'zen-project' })
+  const rows = async () => (await ui.findAll({ type: 'Client' })).filter((n: any) => String(n.props?.module).endsWith('filetree.tsx')).flatMap((n: any) => n.props.props.rows)
+  const cursor = async () => (await rows()).find((r: any) => r.selected)?.name
+  const key = async (k: string, mods: any = {}) => { await ui.key({ key: k, in: 'filetree', ...mods }); await new Promise(r => setTimeout(r, 20)) }
+  await key('G')
+  expect(await cursor()).toBe('z')
+  await key('g'); await key('g')
+  expect(await cursor()).toBe('a')
+  await key('return')
+  expect((await rows()).map((r: any) => r.name)).toEqual(['a', 'one.ts', 'two.ts', 'b', 'z'])
+  await key('/'); await key('t'); await key('h'); await key('r'); await key('return')
+  expect(await cursor()).toBe('three.ts')
 })

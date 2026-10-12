@@ -1,4 +1,4 @@
-import type { ClientModule } from 'claude-code'
+import type { ClientElements, ClientModule, RenderElement } from 'claude-code'
 
 import type { Palette } from '../types'
 
@@ -40,18 +40,12 @@ const TICK_MS = 100
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 const RADIUS = 3
 
-const TreeRow: ClientModule<TreeRowProps, State> = (props, surface) => {
-  const { Box, Text } = surface.elements
+type RowEl = ClientElements
+
+/** Draws one row. Shared by the single-row client below and by the whole-tree client (filetree.tsx). */
+export function rowView(el: RowEl, props: TreeRowProps, ticks: number): RenderElement {
+  const { Box, Text } = el
   const p = props.palette
-  if (surface.state === undefined) {
-    surface.setState({ ticks: 0 })
-    // Only the row being edited moves; every other row is drawn once.
-    if (props.editing) surface.every(TICK_MS, () => surface.setState({ ticks: (surface.state?.ticks ?? 0) + 1 }))
-  }
-  surface.onPointer(e => {
-    if (e.type === 'down' && e.button === 'left') surface.post({ pick: props.pick })
-  })
-  const ticks = props.editing ? surface.state?.ticks ?? 0 : 0
   const color = (t: Tone | '' | undefined) => (t === 'accent' ? p.accent : t === 'success' ? p.success : t === 'warn' ? p.warn : t === 'error' ? p.error : t === 'muted' ? p.muted : t === 'faint' ? p.faint : undefined)
   const nameColor = props.dir ? (props.count ? p.accent : p.muted) : color(props.tone) ?? (props.selected ? p.hi : p.base)
   const bg = props.selected ? p.surface : props.editing ? mix(p.bg, p.accent, 0.14) : undefined
@@ -64,7 +58,6 @@ const TreeRow: ClientModule<TreeRowProps, State> = (props, surface) => {
   const mark = props.dir ? `${props.open ? '▾' : '▸'} ` : `${props.badge} `
   const spin = props.editing ? `${SPIN[ticks % SPIN.length]} ` : ''
   const count = props.count ? ` ${props.count}` : ''
-
   return (
     <Box flexDirection="row" width={props.width} backgroundColor={bg}>
       <Text>{indent}</Text>
@@ -81,6 +74,18 @@ const TreeRow: ClientModule<TreeRowProps, State> = (props, surface) => {
       {props.time ? <Text color={p.faint}>{` ${props.time}`}</Text> : null}
     </Box>
   )
+}
+
+const TreeRow: ClientModule<TreeRowProps, State> = (props, surface) => {
+  if (surface.state === undefined) {
+    surface.setState({ ticks: 0 })
+    // Only the row being edited moves; every other row is drawn once.
+    if (props.editing) surface.every(TICK_MS, () => surface.setState({ ticks: (surface.state?.ticks ?? 0) + 1 }))
+  }
+  surface.onPointer(e => {
+    if (e.type === 'down' && e.button === 'left') surface.post({ pick: props.pick })
+  })
+  return rowView(surface.elements, props, props.editing ? surface.state?.ticks ?? 0 : 0)
 }
 
 export default TreeRow

@@ -6,7 +6,7 @@ import type { UiState } from './views'
 
 export type VimKey = 'h' | 'j' | 'k' | 'l' | 'enter' | 'top' | 'bottom' | 'pagedown' | 'pageup'
 export type VimEffect = { vpan?: [string, number]; toggle?: string; manual?: boolean }
-export type TreeRowLite = { path: string; dir: boolean; open: boolean; depth: number }
+export type TreeRowLite = { path: string; name: string; dir: boolean; open: boolean; depth: number }
 
 type TreeUi = Pick<UiState, 'treeCur' | 'treeSel' | 'treeFocus' | 'keepCursor' | 'scroll' | 'hx'>
 type FilesUi = Pick<UiState, 'selFile' | 'fullFile' | 'filesFocus' | 'keepCursor' | 'scroll' | 'hx'>
@@ -14,7 +14,7 @@ type FilesUi = Pick<UiState, 'selFile' | 'fullFile' | 'filesFocus' | 'keepCursor
 /** How far a half page moves, in rows. */
 const PAGE = 10
 
-function cursorTo(ui: TreeUi, row: TreeRowLite): VimEffect {
+export function cursorTo(ui: TreeUi, row: TreeRowLite): VimEffect {
   ui.treeCur = row.path
   ui.keepCursor = true
   if (!row.dir) {
@@ -87,4 +87,25 @@ export function filesVim(key: VimKey, list: readonly FileEntry[], ui: FilesUi): 
   else if (key === 'bottom') pick(list.length - 1)
   else if (key === 'l' || key === 'enter') ui.filesFocus = 'preview'
   return undefined
+}
+
+/**
+ * Search every file in the project by name, not only the rows in view: the next (step 1) or previous (step -1) match after the
+ * cursor in path order, wrapping round. Its folders are opened so the cursor can land on it.
+ */
+export function treeFind(paths: readonly string[], ui: TreeUi & Pick<UiState, 'treeOpen' | 'treeShut'>, text: string, step: 1 | -1): VimEffect | undefined {
+  const q = text.trim().toLowerCase()
+  if (!q) return undefined
+  const found = [...paths].filter(p => (p.split('/').at(-1) ?? p).toLowerCase().includes(q)).sort()
+  if (!found.length) return undefined
+  const here = ui.treeCur ?? ui.treeSel ?? ''
+  const after = step === 1 ? found.find(p => p > here) : [...found].reverse().find(p => p < here)
+  const target = after ?? (step === 1 ? found[0]! : found.at(-1)!)
+  const parts = target.split('/')
+  for (let i = 1; i < parts.length; i++) {
+    const dir = parts.slice(0, i).join('/')
+    ui.treeOpen[dir] = true
+    delete ui.treeShut[dir]
+  }
+  return cursorTo(ui, { path: target, dir: false })
 }

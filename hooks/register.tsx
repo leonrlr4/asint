@@ -10,7 +10,7 @@ import {
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
 import { briefTool } from './brief'
-import { filesVim, treeVim, type VimEffect, type VimKey } from './vim'
+import { filesVim, treeFind, treeVim, type VimEffect, type VimKey } from './vim'
 import { parseGit, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
 import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
@@ -189,7 +189,7 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
 const SESSIONS_DIR = '.cache/asint/sessions'
 const SAVE_DAYS = 14
 /** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
-const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'filesBy', 'treeSel', 'treeRoot', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'selAgent', 'filesBy', 'treeSel', 'treeRoot', 'treeSearch', 'treeCur', 'treeFocus', 'filesFocus', 'treeOpen', 'treeShut', 'treeChanged', 'follow', 'scroll', 'hx'] as const
 let savedText = ''
 let sessionsDirReady = false
 
@@ -634,6 +634,8 @@ let projectBusy = false
 /** What git says about the project's files, and when the session's first event happened (commits before it do not count as "committed"). */
 let gitState: GitState = new Map()
 let suggestRoot: string | undefined
+/** Keys the tree client sent, handled up to this number; a client instance starts counting again from 1, so each one has its own epoch. */
+let treeAck = { epoch: '', n: 0 }
 let gitBusy = false
 let sessionSince = Date.now()
 let treeCache: { key: string; text?: string } = { key: '' }
@@ -698,6 +700,24 @@ function applyVim(effect: VimEffect | undefined) {
   if (effect.manual) manualAt = Date.now()
   if (effect.vpan) act?.vpan(effect.vpan[0], effect.vpan[1])
   if (effect.toggle) act?.treeToggle(effect.toggle)
+}
+
+
+/** Keys from the tree client, in order, each handled once however many times the client posts its queue. */
+function treeKeys(epoch: string, keys: { n: number; key: string }[]) {
+  if (!project) return
+  if (epoch !== treeAck.epoch) treeAck = { epoch, n: 0 }
+  for (const k of [...keys].sort((a, b) => a.n - b.n)) {
+    if (k.n <= treeAck.n) continue
+    treeAck = { epoch, n: k.n }
+    const rows = projectRows(project, S.files, gitState, live?.path, ui).rows
+    if (k.key.startsWith('search:')) {
+      ui.treeSearch = k.key.slice(7)
+      applyVim(treeFind(project.paths, ui, ui.treeSearch, 1))
+    } else if (k.key === 'next' || k.key === 'prev') applyVim(treeFind(project.paths, ui, ui.treeSearch ?? '', k.key === 'next' ? 1 : -1))
+    else applyVim(treeVim(k.key as VimKey, rows, ui))
+  }
+  lastPanel = 'project'
 }
 
 function treeKey(key: VimKey) {
@@ -1243,7 +1263,12 @@ export const register: Register = on => {
 
   // The editor sends the new layout on mouse release: validate and save it.
   on('ui.message', { requestId: PANE }, async ($, e, next) => {
-    const data = e.data as { layout?: unknown; pick?: string; split?: { panel: string; left: number; total: number; final: boolean } }
+    const data = e.data as { layout?: unknown; epoch?: string; keys?: { n: number; key: string }[]; pick?: string; split?: { panel: string; left: number; total: number; final: boolean } }
+    if (Array.isArray(data?.keys) && typeof data.epoch === 'string') {
+      treeKeys(data.epoch, data.keys)
+      $.ui.invalidate('ui.render')
+      return next(e)
+    }
     // A click on a row drawn by a Client module (the running command and the running checklist item): it reports what it stands for.
     if (typeof data?.pick === 'string') {
       const [kind, ...rest] = data.pick.split(':')
@@ -1573,7 +1598,7 @@ export const register: Register = on => {
     }
     for (const t of PANELS) if (isShown(shown(), t)) fresh.delete(t)
 
-    const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, git: gitState, suggestRoot, treeText, treePreview, live, flash,
+    const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, git: gitState, suggestRoot, treeAck, treeText, treePreview, live, flash,
       oOwner: oOwner(), current: paneFocused ? (ui.zen ?? (isShown(shown(), lastPanel) ? lastPanel : undefined)) : undefined }
     try {
       return dashboard(ctx, shown())

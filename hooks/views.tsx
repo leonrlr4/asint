@@ -73,6 +73,8 @@ export type UiState = {
   /** The folder the FILES tree shows instead of the session's own, set by /asint root or the switch button. */
   treeRoot?: string
   treeFocus: 'tree' | 'preview'
+  /** The name being searched for in the FILES tree (/ n N). */
+  treeSearch?: string
   filesFocus: 'list' | 'preview'
   /** Set by a keyboard move: the next draw scrolls the list so the cursor is in view. */
   keepCursor?: boolean
@@ -165,6 +167,8 @@ export type ViewCtx = {
   git: GitState
   /** A git folder the agent is editing in that FILES does not show yet. */
   suggestRoot?: string
+  /** The tree client's key queue: which keys the hooks have handled, per client instance. */
+  treeAck: { epoch: string; n: number }
   treeText?: string
   treePreview?: { path: string; frame: string; width: number; height: number }
   /** FILES follow mode: the edit call being streamed; the lines just changed (0-based, inclusive), highlighted for a few seconds. */
@@ -883,22 +887,23 @@ export function projectTab(c: ViewCtx, maxRows: number) {
           </Box>
         ) : null}
         {!rows.length ? <Text color={p.muted}>{t('這個 session 還沒有動過的檔案。', 'No files changed in this session yet.')}</Text> : null}
-        {rows.slice(start, start + listRows).map(r => {
-          const f = r.dir ? undefined : touched(r.path)
-          const editing = !r.dir && c.live?.path === `${project.root}/${r.path}`
-          const st = r.dir ? undefined : statusOf(f, c.git.get(r.path), editing)
-          const badge = r.dir ? undefined : badgeOf(r.name)
-          return (
-            <el.Client key={`tr-${r.path}`} module="./treerow.tsx" width={width} props={{
-              palette: p, width, depth: r.depth, dir: r.dir, open: r.open, name: r.name,
+        <el.Client key="filetree" module="./filetree.tsx" width={width} props={{
+          palette: p, width, ack: c.treeAck, search: ui.treeSearch ?? '',
+          rows: rows.slice(start, start + listRows).map(r => {
+            const f = r.dir ? undefined : touched(r.path)
+            const editing = !r.dir && c.live?.path === `${project.root}/${r.path}`
+            const st = r.dir ? undefined : statusOf(f, c.git.get(r.path), editing)
+            const badge = r.dir ? undefined : badgeOf(r.name)
+            return {
+              depth: r.depth, dir: r.dir, open: r.open, name: r.name,
               badge: badge?.text ?? '', badgeTone: badge?.tone ?? 'faint',
               chip: st ? label(st.kind) : '', tone: st?.tone ?? '', editing,
               time: showTime && !r.dir && f ? fmtClock(f.lastAt) : '',
               count: r.dir ? hot.get(r.path) ?? 0 : 0, selected: r.path === curPath,
               pick: `${r.dir ? 'dir' : 'file'}:${r.path}`,
-            }} />
-          )
-        })}
+            }
+          }),
+        }} />
         {rows.length > listRows ? <Text color={p.faint}>{pos(start, listRows, rows.length).trim()} · {t('滾輪捲動', 'scroll to see more')}</Text> : null}
       </Box>
     )
