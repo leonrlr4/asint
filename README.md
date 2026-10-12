@@ -34,10 +34,17 @@ One line above the prompt: the session's name, the git repository and branch (re
 | FILES | The whole project tree. Follow mode jumps to the file the agent is editing and shows the new text as it streams in |
 | ARCH | The project's LikeC4 architecture diagram, clickable |
 | MAP | Radar, graph, heat map, combined and board views of agents and files |
+| ORCH | Every agent as a card with a pixel worker whose hat shows its kind, a plain-language line for what it is doing, and a bar while it works; finished agents shrink to one line. Click a card for its latest steps, and CHANGES narrows to that agent's files |
 | MEDIA | Images, GIFs, videos, 3D models and web pages the session produced |
 | LOG | Every other tool call and agent event |
 
 Click the dashboard (or open it with `/asint`) to give it the keyboard: the letters above switch panels, and the cell you are working in gets a heavy border in the bright color. Drag the layout into any shape with `g`; each cell can stack several panels as tabs. `⤢` (or `z`) makes one panel fill the dashboard, and **▁ Minimize** folds the dashboard away and keeps the prompt bar.
+
+### Keys in FILES and CHANGES
+
+Click the tree (or the list) to hold the keyboard there. In the FILES tree `j` `k` move, `l` or Enter open a folder or go into a file's preview, `h` closes a folder or climbs to its parent, `gg` and `G` jump to the ends, `Ctrl-d` and `Ctrl-u` move half a page, and `/` searches file names (Enter to confirm, `n` and `N` for the next and previous match). In the preview `j` and `k` scroll and `h` comes back. CHANGES takes the same keys on its list. While the pane (not the tree) holds the keys, `h` `j` `k` `l` work on the card's `<` `>` `▴` `▾` buttons, `b` and `w` scroll sideways, and `/asint root <folder>` points FILES at another folder.
+
+A session is saved to `~/.cache/asint/sessions/<id>.json` every few seconds and comes back when the session is resumed.
 
 ### Live edits
 
