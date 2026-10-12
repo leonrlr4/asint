@@ -1245,7 +1245,16 @@ function orchTab(c: ViewCtx, maxRows: number) {
   const cards: Card[] = [main, ...order.map(a => ({ id: a.id, type: a.type, label: a.label, status: a.status, startedAt: a.startedAt, endedAt: a.endedAt, doing: a.doing, model: a.model }))]
   const statusText = (x: Card['status']) => (x === 'running' ? t('執行中', 'Running') : x === 'done' ? t('完成', 'Done') : x === 'error' ? t('失敗', 'Failed') : t('閒置', 'Idle'))
   const statusColor = (x: Card['status']) => (x === 'running' ? p.success : x === 'error' ? p.error : x === 'done' ? p.muted : p.faint)
-  // Running agents get a full card with their worker; the finished ones shrink to one line each below, so the room goes to what is moving.
+  // The border says the state at a glance: a running agent's glows and fades, a failed one is red, a finished one is a calm green, an idle one dim.
+  const pulse = (Math.sin(frame * 0.9) + 1) / 2
+  const borderOf = (x: { id: string; status: 'running' | 'done' | 'error' | 'idle' }) =>
+    ui.selAgent === x.id ? p.accent
+      : x.status === 'running' ? mix(p.faint, p.success, 0.35 + 0.65 * pulse)
+      : x.status === 'error' ? p.error
+      : x.status === 'done' ? mix(p.faint, p.success, 0.3)
+      : p.faint
+  const divider = (label: string) => <Text color={p.faint} wrap="truncate-end">{`── ${label} ${'─'.repeat(Math.max(2, width - label.length - 4))}`}</Text>
+  // Running agents get a full card with their worker; the finished ones shrink to a two-line card below a divider, so the room goes to what is moving.
   const live = cards.filter(x => x.status === 'running' || x.id === 'main')
   const past = cards.filter(x => !live.includes(x))
   const cols = Math.max(1, Math.floor((width + 1) / 47))
@@ -1265,7 +1274,9 @@ function orchTab(c: ViewCtx, maxRows: number) {
       <Button key={`oc-m-${x.id}`} plain dimColor label={`› ${t('傳訊息給它', 'Message it')}`} onPress={() => act.openMsg(x.id)} />
     </Box>
   )
-  const roomForLive = Math.max(1, Math.floor((maxRows - 3 - past.length) / (SPRITE_ROWS + 4)))
+  // The finished cards (4 rows each, side by side) and the two dividers take their room first; the running ones share what is left.
+  const pastRows = past.length ? Math.ceil(past.length / cols) * 4 + 2 : 0
+  const roomForLive = Math.max(1, Math.floor((maxRows - 4 - pastRows) / (SPRITE_ROWS + 4)))
   const visible = Math.max(cols, roomForLive * cols)
   const start = scrollAt(c, 'orch', Math.max(0, live.length - visible))
   return (
@@ -1275,14 +1286,14 @@ function orchTab(c: ViewCtx, maxRows: number) {
         <Text color={p.muted}>{t('完成', 'Done')} {done}</Text>
         <Text color={failed ? p.error : p.faint}>{t('失敗', 'Failed')} {failed}</Text>
       </Box>
+      {divider(`${t('進行中', 'Working')} ${live.length}`)}
       <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start">
         {live.slice(start, start + visible).map(x => {
           const end = x.endedAt ?? now
-          const border = x.status === 'running' ? mix(p.faint, p.success, 0.6) : p.faint
           const files = filesOf(x.id)
           const barW = Math.max(6, infoW - 9)
           return (
-            <Box key={`oc-${x.id}`} flexDirection="column" width={cardW} borderStyle="round" borderColor={ui.selAgent === x.id ? p.accent : border} paddingX={1}>
+            <Box key={`oc-${x.id}`} flexDirection="column" width={cardW} borderStyle="round" borderColor={borderOf(x)} paddingX={1}>
               <Box flexDirection="row" columnGap={2}>
                 <Box width={SPRITE_COLS} flexShrink={0} flexDirection="column">{sprite(x)}</Box>
                 <Box flexDirection="column" width={infoW}>
@@ -1307,35 +1318,37 @@ function orchTab(c: ViewCtx, maxRows: number) {
           )
         })}
       </Box>
-      {past.length ? <Box marginTop={1}><Text color={p.faint}>{t('已結束', 'Finished')} {past.length}</Text></Box> : null}
-      {past.map(x => {
-        const files = filesOf(x.id)
-        const dur = x.startedAt ? fmtDur((x.endedAt ?? now) - x.startedAt) : ''
-        const bad = x.status === 'error'
-        const head = miniOf(roleOf(x.type), bad ? 'failed' : 'done').map((row, i) => (
-          <Text key={`mh-${x.id}-${i}`}>{runsOf(row).map((r, k) => <Text key={k} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
-        ))
-        return (
-          <Box key={`op-${x.id}`} flexDirection="column" marginTop={1}>
-            <Box flexDirection="row" columnGap={1}>
-              <Box width={MINI_COLS} flexShrink={0} flexDirection="column">{head}</Box>
-              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                <Box flexDirection="row" columnGap={1}>
-                  <Button key={`op-t-${x.id}`} plain dimColor={ui.selAgent !== x.id} label={clip(x.type, Math.max(8, width - 26))} onPress={() => act.selAgent(x.id)} />
-                  <Box flexGrow={1} />
-                  <Text color={p.faint}>{dur}</Text>
-                  <Text color={bad ? p.error : p.success} bold>{bad ? '✗' : '✓'}</Text>
-                </Box>
-                <Box flexDirection="row" columnGap={1}>
-                  <Box flexGrow={1} flexShrink={1}><Text color={bad ? p.error : p.muted} wrap="truncate-end">{x.label}</Text></Box>
-                  <Text color={p.faint}>{files ? (files === 1 ? t('1 檔', '1 file') : t(`${files} 檔`, `${files} files`)) : ''}</Text>
+      {past.length ? <Box marginTop={1}>{divider(`${t('已結束', 'Finished')} ${past.length}`)}</Box> : null}
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start">
+        {past.map(x => {
+          const files = filesOf(x.id)
+          const dur = x.startedAt ? fmtDur((x.endedAt ?? now) - x.startedAt) : ''
+          const bad = x.status === 'error'
+          const head = miniOf(roleOf(x.type), bad ? 'failed' : 'done').map((row, i) => (
+            <Text key={`mh-${x.id}-${i}`}>{runsOf(row).map((r, k) => <Text key={k} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
+          ))
+          return (
+            <Box key={`op-${x.id}`} flexDirection="column" width={cardW} borderStyle="round" borderColor={borderOf(x)} paddingX={1}>
+              <Box flexDirection="row" columnGap={1}>
+                <Box width={MINI_COLS} flexShrink={0} flexDirection="column">{head}</Box>
+                <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                  <Box flexDirection="row" columnGap={1}>
+                    <Button key={`op-t-${x.id}`} plain dimColor={ui.selAgent !== x.id} label={clip(x.type, Math.max(8, innerW - MINI_COLS - 14))} onPress={() => act.selAgent(x.id)} />
+                    <Box flexGrow={1} />
+                    <Text color={p.faint}>{dur}</Text>
+                    <Text color={bad ? p.error : p.success} bold>{bad ? '✗' : '✓'}</Text>
+                  </Box>
+                  <Box flexDirection="row" columnGap={1}>
+                    <Box flexGrow={1} flexShrink={1}><Text color={bad ? p.error : p.muted} wrap="truncate-end">{x.label}</Text></Box>
+                    <Text color={p.faint}>{files ? (files === 1 ? t('1 檔', '1 file') : t(`${files} 檔`, `${files} files`)) : ''}</Text>
+                  </Box>
                 </Box>
               </Box>
+              {ui.selAgent === x.id ? steps(x, 0) : null}
             </Box>
-            {ui.selAgent === x.id ? steps(x, MINI_COLS + 1) : null}
-          </Box>
-        )
-      })}
+          )
+        })}
+      </Box>
     </Box>
   )
 }
