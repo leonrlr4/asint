@@ -15,6 +15,17 @@ asint is a Claude Code mod (a plugin built on function hooks). It needs Claude C
 
 The dashboard opens by itself when a session starts and the terminal is at least 144 columns wide. Type `/asint` to open it on a narrower terminal.
 
+## Update
+
+```
+claude plugin marketplace update asint
+claude plugin update asint@asint
+```
+
+Restart Claude Code to run the new version. The same two steps are in `/plugin`: open Marketplaces, update `asint`, then update the plugin under Installed. Releases are listed at [github.com/leonrlr4/asint/releases](https://github.com/leonrlr4/asint/releases).
+
+To work on asint itself, clone the repository, add the folder as a marketplace with `claude plugin marketplace add <folder>` and install `asint@asint`; edits then apply after `/reload-plugins`. Run `claude plugin test .` and `claude plugin validate .` in the folder before sending a change. A symlink into `~/.claude/mods` is refused ("Path escapes plugin directory").
+
 ## What you get
 
 ### The prompt bar
