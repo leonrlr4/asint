@@ -574,3 +574,12 @@ test('/asint root changes the folder FILES shows and /asint root with nothing go
   const back: any = await $.command.run({ command: 'asint', args: 'root' } as never)
   expect(back.text).toContain('back')
 })
+
+test('a reply is drawn by the reply client with a diamond on its first block only', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  const first: any = await $.ui.mount({ plugin: 'asint', surface: 'terminal', component: 'AssistantMessage', props: { text: '# Title\n\nbody', isFirstOfReply: true } } as never)
+  const reply = await first.find({ key: 'reply' })
+  expect(reply.props.props.text).toBe('# Title\n\nbody')
+  expect(await texts(first)).toContain('◆')
+})

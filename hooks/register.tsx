@@ -1655,6 +1655,28 @@ export const register: Register = on => {
     )
   })
 
+  // Claude's replies: the first block of a reply gets an accent-colored ◆, the text goes to reply.tsx, which lays it out like a document
+  // at the width the block really has. Anything that goes wrong falls back to the engine's own drawing, so a reply never disappears.
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e)
+    try {
+      const { Box, Text, Client } = $.ui.resolve(e as typeof e & { surface: 'terminal' })
+      const p = await read($, chatPalette)
+      return (
+        <Box flexDirection="row">
+          <Box width={2} flexShrink={0}>
+            <Text color={p.accent}>{e.props.isFirstOfReply ? '◆' : ' '}</Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1} flexDirection="column">
+            <Client key="reply" module="./reply.tsx" width="100%" props={{ text: e.props.text, palette: p }} />
+          </Box>
+        </Box>
+      )
+    } catch {
+      return next(e)
+    }
+  })
+
   // The user's own messages: a block one step lighter than the background, an accent-colored prompt, and pasted images shown enlarged below.
   // Only messages from the composer; task notifications and other agents' messages are left to the engine (it handles collapsing).
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
