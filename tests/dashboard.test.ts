@@ -509,7 +509,7 @@ test('vim keys in the FILES tree: j and k move the cursor, l opens a folder or g
 import { renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from '../hooks/sprites'
 
 test('workers: every role draws the same size, a working one moves and a failed one looks different', () => {
-  for (const role of ['main', 'explore', 'plan', 'general', 'guide', 'other'] as const) {
+  for (const role of ['main', 'explore', 'plan', 'general', 'guide', 'designer', 'developer', 'reviewer', 'tester', 'writer', 'security', 'scholar', 'other'] as const) {
     const rows = renderSprite(role, 'working', 0)
     expect(rows.length).toBe(SPRITE_ROWS)
     for (const row of rows) expect(row.length).toBe(SPRITE_COLS)
@@ -520,7 +520,15 @@ test('workers: every role draws the same size, a working one moves and a failed 
   expect(JSON.stringify(renderSprite('plan', 'idle', 0))).not.toBe(JSON.stringify(renderSprite('general', 'idle', 0)))
   expect(roleOf('Explore')).toBe('explore')
   expect(roleOf('claude-code-guide')).toBe('guide')
-  expect(roleOf('statusline-setup')).toBe('other')
+  expect(roleOf('code-reviewer')).toBe('reviewer')
+  expect(roleOf('ui-designer')).toBe('designer')
+  expect(roleOf('test-runner')).toBe('tester')
+  expect(roleOf('security-auditor')).toBe('reviewer')
+  expect(roleOf('threat-model')).toBe('security')
+  expect(roleOf('doc-writer')).toBe('writer')
+  expect(roleOf('bio-analyst')).toBe('scholar')
+  expect(roleOf('statusline-setup')).toBe('developer')
+  expect(roleOf('claude')).toBe('other')
   expect(runsOf(renderSprite('other', 'idle', 0)[0]!).map(r => r.ch).join('').length).toBe(SPRITE_COLS)
 })
 

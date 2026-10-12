@@ -4,7 +4,7 @@
 /** One drawn cell: the character and its colors; colors are hex strings, absent means the card's own background. */
 export type Cell = { ch: string; fg?: string; bg?: string }
 
-export type Role = 'main' | 'explore' | 'plan' | 'general' | 'guide' | 'other'
+export type Role = 'main' | 'explore' | 'plan' | 'general' | 'guide' | 'designer' | 'developer' | 'reviewer' | 'tester' | 'writer' | 'security' | 'scholar' | 'other'
 export type Mood = 'working' | 'done' | 'failed' | 'idle'
 
 const W = 12
@@ -27,6 +27,10 @@ const COLORS: Record<string, string> = {
   r: '#e8e4da', n: '#4f9b6e', N: '#2f6b48',
   // main: crown
   c: '#f5d36b', C: '#c9962e', j: '#e0573f',
+  // designer: red beret, brush
+  R: '#c0394f', Q: '#8f2a3b', a: '#4a90e2', z: '#b5895a', p: '#e6c28a',
+  // reviewer: grey cap; writer: green beanie; security: dark helmet; scholar: black cap
+  G: '#6b7480', Z: '#4a5059', V: '#3f9a62', X: '#2c6b43', h: '#2b2f38', S: '#5b8def', l: '#7fd0e0',
 }
 
 /** The body, rows 3 to 9; hats go over rows 0 to 4 and tools beside the body. */
@@ -78,6 +82,60 @@ const OVERLAYS: Record<Role, Overlay> = {
   guide: {
     4: '.rrrr..rrrr.',
     5: '.r..r..r..r.',
+    6: '..........nn',
+    7: '..........NN',
+  },
+  designer: {
+    1: '....RRRR..a.',
+    2: '..RRRRRRRR.z',
+    3: '..QQQQQQQQ.z',
+    5: 'pp.........z',
+    6: 'pp.........z',
+  },
+  developer: {
+    2: '...kkkkkk...',
+    3: '..kk....kk..',
+    4: '.kk......kk.',
+    5: '.kk......kk.',
+    6: '..mmmmmmmm..',
+    7: '..mwwwwwwm..',
+  },
+  reviewer: {
+    1: '...GGGGGG...',
+    2: '..ZZZZZZZZ..',
+    3: '.GGGGGGGGGG.',
+    4: '..........j.',
+    5: '..........j.',
+    6: '..........m.',
+    7: '..........m.',
+  },
+  tester: {
+    4: '.lll....lll.',
+    5: '.l.l....l.l.',
+    6: '..........nn',
+    7: '.........nnn',
+    8: '.........nnn',
+  },
+  writer: {
+    1: '....cVVc....',
+    2: '..VVVVVVVV..',
+    3: '..XXXXXXXX..',
+    5: 'ww..........',
+    6: 'wk..........',
+    7: 'ww..........',
+  },
+  security: {
+    1: '...hhhhhh...',
+    2: '..hhhhhhhh..',
+    3: '..hSSSSSSh..',
+    5: 'uu..........',
+    6: 'uUu.........',
+    7: '.u..........',
+  },
+  scholar: {
+    1: '.kkkkkkkkkk.',
+    2: '..kkkkkkkk.c',
+    3: '..hhhhhhhh.c',
     6: '..........nn',
     7: '..........NN',
   },
@@ -136,9 +194,16 @@ export function roleOf(type: string | undefined): Role {
   const t = (type ?? '').toLowerCase()
   if (t === 'main') return 'main'
   if (t.includes('explore')) return 'explore'
-  if (t.includes('plan')) return 'plan'
-  if (t.includes('general')) return 'general'
   if (t.includes('guide')) return 'guide'
+  if (t.includes('plan') || t.includes('architect')) return 'plan'
+  if (/review|critic|audit|lint/.test(t)) return 'reviewer'
+  if (/test|qa|verif|check/.test(t)) return 'tester'
+  if (/design|\bui\b|ux|style/.test(t)) return 'designer'
+  if (/secur|safety|threat/.test(t)) return 'security'
+  if (/doc|writ|summar|draft|edit/.test(t)) return 'writer'
+  if (/research|analy|bio|science|data/.test(t)) return 'scholar'
+  if (/dev|implement|engineer|build|code|fix|setup|config/.test(t)) return 'developer'
+  if (t.includes('general')) return 'general'
   return 'other'
 }
 
