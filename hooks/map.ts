@@ -281,3 +281,10 @@ export function draw(view: MapView, c: Canvas, p: Palette, input: MapInput) {
   else if (input.comboSlot === 1) graph(c, p, input, { x: 0, y: 4, w: c.w, h: topH - 4 })
   timeline(c, p, input, c.rows - tlRows)
 }
+
+/** The Map drawn on a fresh canvas of the given size, encoded for $.ui.blit. */
+export function encodeMap(view: MapView, size: { cols: number; rows: number }, p: Palette, input: MapInput): string {
+  const c = new Canvas(size.cols, size.rows)
+  draw(view, c, p, input)
+  return c.encode()
+}

@@ -1,26 +1,33 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { Palette, Skin } from '../types'
 
-import { Canvas } from './canvas'
-import { draw } from './map'
-import {
-  applyTaskCreate, applyTaskUpdate, applyTodoWrite, changesList, emptySession, endAgentFromNotification, exitCodeOf, isMedia, log, mediaKind, reviveSession,
-  patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
-} from './model'
+import { encodeMap } from './map'
+import { changesList, emptySession, isMedia, log, reviveSession, startExec, upsertAgent, type Session } from './model'
 import { briefTool } from './brief'
+import { addPrepped, addWebPage, artifactUrl, htmlArgs, newMediaArgv, newMediaOf, openArgv, type Prepped, prepArgv, previewOf, slug } from './media'
+import {
+  agentTag, applyChecklist, applyUsage, endExec, endTask, isDocsCreate, parseTitle, prettyModel, recordTool, sendReport, sendTargets, summary, taskOutput, titleArgv,
+} from './events'
+import {
+  archBack, archBaseFrom, archDirLabel, archPress, archPrune, archRebase, archStamp, archUp, isC4File, isSystemMaps, likec4Errors, likec4Label, mermaidDoc, SYSTEM_MAPS,
+} from './archdir'
+import { archInitAsk, archRule, CHECKLIST_RULE, CHECKLIST_SPEC, DOCS_DENY, OUTPUT_RULE, PLAIN_ASK } from './rules'
+import {
+  followFile, keepActive, nudge, oOwner, panelOf, resetTree, scrollKeyAt, scrollSign, selectFile, selectTodo, selectTreeFile, toggleAgent, toggleDir, toggleMsg,
+} from './viewstate'
 import { applySavedView, cleanArgv, serializeSession, SESSIONS_DIR, sessionPath } from './persist'
 import { filesVim, treeFind, treeVim, type VimEffect, type VimKey } from './vim'
 import { gitQueries, listArgv, parseGit, parseListing, type GitState } from './tree'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
-import { compute, DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
+import { DEFAULT_LAYOUT, focusPanel, isShown, type LayoutNode, type Panel, parseLayout, PANELS } from './layout'
 import { type ArchNode, parseLikeC4 } from './arch'
 import { pngSize } from './image'
 import { getLang, langFromLocale, setLang, t } from './i18n'
-import { LIVE_TOOLS, lineOf, type LiveEdit, readLive } from './live'
+import { editedLines, LIVE_TOOLS, type LiveEdit, readLive } from './live'
 import { cells, headWidth, imageTags, type Location, locationRow, type Picture, TILE_CHROME_ROWS, tiles } from './prompt'
-import { type ArchState, dashboard, treeRows, PANEL_KEY, PANEL_LABEL, panelArea, projectRows, ratioFromDrag, DIVIDER, splitWidths, vitalsCompact, vitalsCompactText, WIDE, type Actions, type UiState, type ViewCtx } from './views'
+import { type ArchState, dashboard, PANEL_KEY, PANEL_LABEL, panelArea, projectRows, ratioFromDrag, vitalsCompact, vitalsCompactText, type Actions, type UiState, type ViewCtx } from './views'
 
 // asint: a personal Claude Code interface. Every hook that uses $ lives in this file ($ cannot be passed
 // into other module files); views are in views.tsx, the Map in map.ts and data in model.ts, all pure functions that never touch $.
@@ -75,7 +82,6 @@ async function setSkin($: EngineInterface, next: Skin) {
 const PANE = 'asint'
 // Helper scripts shipped in the plugin's bin/ (media-prep, asint-open, asint-tb, asint-likec4-view); set at session start.
 let BIN = 'bin'
-const MEDIA_CACHE = '/tmp/asint-media'
 // One 100 ms tick drives every animation: the Map draws every tick while active (10 fps) and every 5 ticks when idle (2 fps),
 // media animations advance one frame per tick, background command output is read every 10 ticks. Nothing off-screen is drawn.
 const TICK_MS = 100
@@ -136,35 +142,14 @@ async function findSessionDir($: EngineInterface) {
   return undefined
 }
 
-const prettyModel = (m: string) => m.replace(/^claude-/, '').replace(/-(\d+)-(\d+)$/, '-$1.$2').replace(/\[.*\]$/, '')
-
 async function refreshUsage($: EngineInterface) {
   const u = await $.session.usage().catch(() => undefined)
-  if (!u) return
-  const v = S.vitals
-  v.ctxPercent = u.context.percent ?? (u.context.tokens !== undefined ? (u.context.tokens / u.context.window) * 100 : undefined)
-  v.ctxTokens = u.context.tokens
-  v.ctxWindow = u.context.window
-  for (const r of u.rateLimits) {
-    if (/5|five|hour/i.test(r.kind) && !/week|7|seven/i.test(r.kind)) v.rate5h = r.percentUsed
-    else if (/week|7|seven/i.test(r.kind)) v.rate7d = r.percentUsed
-  }
-  if (u.cost) v.costUsd = u.cost.usd
+  if (u) applyUsage(S.vitals, u)
 }
 
 const mapVisible = () => paneOpen && !editing && isShown(shown(), 'map')
 const mediaVisible = () => paneOpen && !editing && isShown(shown(), 'media')
 const orchVisible = () => paneOpen && !editing && isShown(shown(), 'orch')
-
-/** Cells in the new layout whose tab set exactly matches a cell in the old one keep the old active tab. */
-function keepActive(next: LayoutNode, prev: LayoutNode): LayoutNode {
-  const actives = new Map<string, number | undefined>()
-  const collect = (n: LayoutNode) => ('tabs' in n ? actives.set(n.tabs.join(','), n.active) : n.children.forEach(collect))
-  collect(prev)
-  const walk = (n: LayoutNode): LayoutNode =>
-    'tabs' in n ? (actives.get(n.tabs.join(',')) !== undefined ? { ...n, active: actives.get(n.tabs.join(',')) } : n) : { ...n, children: n.children.map(walk) }
-  return walk(next)
-}
 
 async function loadLayout($: EngineInterface) {
   const home = await $.env.get('HOME')
@@ -223,33 +208,13 @@ async function cleanSessions($: EngineInterface) {
   await $.process.run(cleanArgv(home)).catch(() => undefined)
 }
 
-
 /** A panel has something new: if its cell is showing another tab, mark it fresh so the tab name lights up. */
-/** Pointer position in the pane → which region to scroll. Files/Exec have two regions side by side (or stacked): list and detail scroll independently. */
-function scrollKeyAt(pointer: { column: number; row: number } | undefined): string | undefined {
-  const cells = compute(shown(), { x: 0, y: 0, w: paneSize.w, h: paneSize.h }).cells
-  const cell = pointer
-    ? cells.find(c => pointer.column >= c.rect.x && pointer.column < c.rect.x + c.rect.w && pointer.row >= c.rect.y && pointer.row < c.rect.y + c.rect.h)
-    : cells.find(c => c.leaf.tabs[c.leaf.active ?? 0] === lastPanel)
-  if (!cell) return undefined
-  const panel = cell.leaf.tabs[cell.leaf.active ?? 0]!
-  if (panel !== 'files' && panel !== 'exec' && panel !== 'project') return panel === 'status' || panel === 'map' ? undefined : panel
-  if (!pointer) return panel
-  const innerW = cell.rect.w - 4
-  if (innerW >= WIDE) return pointer.column - cell.rect.x - 2 < splitWidths(innerW, ui.splitRatio[panel] ?? (panel === 'exec' ? 0.5 : 0.38)).left + DIVIDER ? panel : `${panel}:detail`
-  return pointer.row - cell.rect.y - 2 < (cell.rect.h - 3) * 0.45 ? panel : `${panel}:detail`
-}
-
 function markFresh(panel: Panel) {
   if (!isShown(shown(), panel)) fresh.add(panel)
 }
 const isActive = (now: number) => now - S.lastEventAt < ACTIVE_MS || S.vitals.turnRunning || [...S.agents.values()].some(a => a.status === 'running')
 
-function renderMap(p: Palette, now: number) {
-  const c = new Canvas(mapSize.cols, mapSize.rows)
-  draw(ui.mapView, c, p, { s: S, now, focus: ui.focusAgent, comboSlot: ui.comboSlot })
-  return c.encode()
-}
+const renderMap = (p: Palette, now: number) => encodeMap(ui.mapView, mapSize, p, { s: S, now, focus: ui.focusAgent, comboSlot: ui.comboSlot })
 
 async function tick($: EngineInterface) {
   ticks++
@@ -276,7 +241,7 @@ async function tick($: EngineInterface) {
   if (ticks % 40 === 15 && paneOpen && isShown(shown(), 'project')) void refreshGit($)
   if (archInitPending) {
     archInitPending = false
-    void $.prompt.submit({ text: archInitAsk(), asUser: true }).catch(() => undefined)
+    void $.prompt.submit({ text: archInitAsk(likec4Label(LIKEC4)), asUser: true }).catch(() => undefined)
   }
   if (flash && Date.now() > flash.until) { flash = undefined; $.ui.invalidate('ui.render') }
   if (ticks % 20 === 5 && paneOpen && isShown(shown(), 'arch')) void refreshArch($)
@@ -299,7 +264,6 @@ async function tick($: EngineInterface) {
 const ARCH_CACHE = '/tmp/asint-arch'
 // The likec4 CLI: ASINT_LIKEC4, then likec4 on PATH, then a local npm install, then npx. Resolved at session start.
 let LIKEC4: string[] = ['npx', '-y', 'likec4@1.59.4']
-const likec4Label = () => (LIKEC4[0] === 'npx' ? 'npx likec4' : LIKEC4[0]!)
 
 async function resolveLikec4($: EngineInterface) {
   const env = await $.env.get('ASINT_LIKEC4')
@@ -309,7 +273,6 @@ async function resolveLikec4($: EngineInterface) {
   const local = `${await $.env.get('HOME')}/.local/share/likec4/node_modules/.bin/likec4`
   if (await $.fs.exists(local).catch(() => false)) LIKEC4 = [local]
 }
-const ARCH_EXT = /\.(c4|likec4)$/
 let arch: ArchState | undefined
 // Per-directory export result and "name:mtime" stamp, so switching between system and repo layers doesn't re-export.
 const archCache = new Map<string, ArchState>()
@@ -318,21 +281,7 @@ const archStamps = new Map<string, string>()
 let archBase = ''
 let archBusy = false
 
-/** a/b/../c → a/c. A repo in a .c4 file is a path relative to the diagram's directory. */
-const joinPath = (dir: string, rel: string) => {
-  const parts: string[] = []
-  for (const seg of (rel.startsWith('/') ? rel : `${dir}/${rel}`).split('/')) {
-    if (seg === '..') parts.pop()
-    else if (seg && seg !== '.') parts.push(seg)
-  }
-  return `/${parts.join('/')}`
-}
-
-const SYSTEM_MAPS = '02-Architecture/system-maps'
-const isSystemMaps = (dir: string) => dir.endsWith(`/${SYSTEM_MAPS}`)
-
-const hasC4 = async ($: EngineInterface, dir: string) =>
-  (await $.fs.list(dir).catch(() => [])).some(f => f.kind === 'file' && ARCH_EXT.test(f.name))
+const hasC4 = async ($: EngineInterface, dir: string) => (await $.fs.list(dir).catch(() => [])).some(isC4File)
 
 /**
  * Search upward for the system layer: an ancestor directory with a child containing 02-Architecture/system-maps/*.c4 (a team vault),
@@ -352,34 +301,17 @@ async function findSystemMaps($: EngineInterface, from: string) {
   return undefined
 }
 
-/** Starting trail: inside a repo, "system layer (if found) → the repo's docs/"; outside a repo, the system layer or cwd/docs. */
+/** Starting trail for cwd: its repo root (if any) and the system layer above it (see archBaseFrom). */
 async function archBaseDirs($: EngineInterface) {
   const cwd = await $.session.cwd()
   const r = await $.process.run(['git', '-C', cwd, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 }).catch(() => undefined)
   const root = r && r.exitCode === 0 ? r.stdout.trim() : undefined
-  const sys = await findSystemMaps($, root ? root.slice(0, root.lastIndexOf('/')) : cwd)
-  if (root) return sys ? [sys, `${root}/docs`] : [`${root}/docs`]
-  return sys ? [sys] : [`${cwd}/docs`]
+  return archBaseFrom(root, await findSystemMaps($, root ? root.slice(0, root.lastIndexOf('/')) : cwd), cwd)
 }
-
-/** The directory being viewed (last breadcrumb). */
-async function archDir($: EngineInterface) {
-  return ui.archDirs.at(-1) ?? (await archBaseDirs($)).at(-1)!
-}
-
-/** Breadcrumb label for a directory: the workspace folder name (the vault's parent) for the system layer, the repo name for a repo layer. */
-const archDirLabel = (dir: string) => {
-  const parts = dir.split('/')
-  return isSystemMaps(dir) ? parts.at(-4) ?? 'system' : parts.at(-2) ?? dir
-}
-
-// likec4 error messages carry ANSI color codes and start with "Line N: ".
-const likec4Errors = (out: string) =>
-  out.replace(/\x1b\[[0-9;]*m/g, '').split('\n').map(l => l.trim()).filter(l => /^Line \d+:/.test(l) || /^Error/i.test(l)).slice(0, 5).join('\n')
 
 /**
  * The system layer lives in a vault and Obsidian can't read .c4, so after each successful export convert it to Mermaid with likec4
- * and write one views/<id>.md per view (Obsidian renders mermaid blocks). The header says the file is generated; edit the .c4 instead.
+ * and write one views/<id>.md per view. The header says the file is generated; edit the .c4 instead.
  */
 async function writeMermaid($: EngineInterface, dir: string, model: NonNullable<ArchState['model']>) {
   const out = `${ARCH_CACHE}/mmd-${slug(dir)}`
@@ -391,20 +323,19 @@ async function writeMermaid($: EngineInterface, dir: string, model: NonNullable<
     const id = f.name.slice(0, -4)
     const mmd = await $.fs.read(`${out}/${f.name}`).catch(() => undefined)
     if (typeof mmd !== 'string') continue
-    const title = model.views[id]?.title ?? id
-    await $.fs.write(`${dir}/views/${id}.md`, `# ${title}\n\n> Generated by asint from the LikeC4 model in this folder. Edit the \`.c4\` file, not this one.\n\n\`\`\`mermaid\n${mmd.trim()}\n\`\`\`\n`).catch(() => undefined)
+    await $.fs.write(`${dir}/views/${id}.md`, mermaidDoc(model.views[id]?.title ?? id, mmd)).catch(() => undefined)
   }
 }
 
 /** Export a directory's .c4 files to JSON (with layout coordinates) and parse it; reuse the cache when no file changed. */
 async function loadArchDir($: EngineInterface, dir: string) {
-  const files = (await $.fs.list(dir).catch(() => [])).filter(f => f.kind === 'file' && ARCH_EXT.test(f.name))
+  const files = (await $.fs.list(dir).catch(() => [])).filter(isC4File)
   if (!files.length) {
     if (!archCache.get(dir)?.missing) archCache.set(dir, { dir, missing: true })
     archStamps.delete(dir)
     return
   }
-  const stamp = files.map(f => `${f.name}:${f.mtimeMs}`).sort().join('|')
+  const stamp = archStamp(files)
   if (archStamps.get(dir) === stamp && archCache.get(dir)?.model) return
   archStamps.set(dir, stamp)
   const prev = archCache.get(dir)
@@ -418,14 +349,6 @@ async function loadArchDir($: EngineInterface, dir: string) {
   if (model && isSystemMaps(dir)) await writeMermaid($, dir, model)
 }
 
-const archRule = (paths: string[]) => `# Architecture diagrams
-
-This project keeps LikeC4 architecture models in ${paths.join(', ')}. The user watches them live in the asint ARCH panel, which re-renders a few seconds after a file is saved.${paths.some(p => p.includes(`/${SYSTEM_MAPS}/`)) ? ` Files under ${SYSTEM_MAPS} are the system layer (all projects of the workspace, with \`metadata { repo '...' }\` pointing at each repo); the docs/ files are the repo layer.` : ''}
-
-You decide whether a change you make alters the architecture. It does when you add, remove or rename a module or service, add or drop an external dependency (an API, database, CLI, or a file the system reads or writes), or change how parts talk to each other. Pure refactors, bug fixes inside one module, tests and docs do not.
-
-When it does, update the repo-layer .c4 in the same turn; when the change touches how systems talk to each other or to outside services (APIs, storage, auth, queues), update the system layer too. Keep existing element ids stable, follow each file's existing language for labels, and check with \`${likec4Label()} validate <dir>\`. Never commit these files on your own.`
-
 /** Pick the starting trail from cwd and load the layer being viewed; redraw only on change. */
 async function refreshArch($: EngineInterface) {
   if (archBusy) return
@@ -438,9 +361,7 @@ async function refreshArch($: EngineInterface) {
       const anyC4 = (await Promise.all(base.map(d => hasC4($, d)))).some(Boolean)
       if (!anyC4 && arch?.model) return
       archBase = key
-      ui.archDirs = base
-      ui.archTrail = []
-      ui.archSel = undefined
+      archRebase(ui, base)
     }
     const dir = ui.archDirs.at(-1)!
     const before = archCache.get(dir)
@@ -448,8 +369,7 @@ async function refreshArch($: EngineInterface) {
     const next = archCache.get(dir)
     if (next === arch && next === before) return
     arch = next
-    // If the selected view disappeared (renamed, deleted), go back to the overview.
-    if (arch?.model && !ui.archTrail.every(id => arch!.model!.views[id])) { ui.archTrail = []; ui.archSel = undefined }
+    archPrune(ui, arch)
     markFresh('arch')
     $.ui.invalidate('ui.render')
   } finally {
@@ -459,20 +379,9 @@ async function refreshArch($: EngineInterface) {
 
 // ── Around the prompt (sub-project B) ────────────────────────────────
 
-// The "Plain" button sends its question through /btw, a side question that stays out of the main conversation and doesn't interrupt a running turn.
-// What the "Arch diagram" button (and /asint arch) asks the main conversation: the agent checks for a
-// diagram itself, creates one if there is none, and brings an existing one in line with the code.
-const archInitAsk = () => `Check this project's LikeC4 architecture diagrams: create what is missing, update what is out of date.
-
-1. Find them: inside a git repo, look for docs/*.c4 at the repo root, and look upward for a workspace system layer at */02-Architecture/system-maps/*.c4. In a workspace folder that is not a repo itself, the system layer is the starting point and every git repo below it is part of the job.
-2. Repo layer: every repo needs its own docs/architecture.c4 at container level: the units that run, data stores and queues, external services, and who calls it. Read the repo first (AGENTS.md, CLAUDE.md, README, entry points, Dockerfiles and deploy config, dependency manifests, .env.example) and back every element with a file you read. In a workspace, go into each repo and create the ones that are missing; do not stop at the top level.
-3. System layer (workspaces with several repos): one element per repo, or per system grouping several repos, and each repo element carries metadata { repo '<path from the .c4 folder to the repo>' } so the diagram can be opened into that repo's own diagram. In repo diagrams, an element that stands for another repo of the same workspace carries the same metadata, so readers can move sideways. Make sure every repo path you write resolves to a folder that now has docs/*.c4.
-4. Diagrams that already exist: compare them with the code, add what is missing and correct what is stale, keeping element ids stable.
-5. Write labels in each project's own language (English unless the project is clearly written in another one). Check every folder you touched with \`${likec4Label()} validate <dir>\`, do not commit, and finish with a short list of what you created or changed per folder.`
-
+// Set by the "Arch diagram" button and /asint arch; the next tick asks the main conversation (rules.ts has the question).
 let archInitPending = false
 
-const PLAIN_ASK = 'Explain what your previous reply said and did, in the language I write in, at a level a programming beginner can follow. Avoid jargon; when a term is unavoidable, explain it.'
 // Pasting an image doesn't fire prompt.edit, so the draft is polled.
 const DRAFT_POLL_MS = 250
 // Thumbnail aspect ratio used when the file header can't be read (over the $.fs.read size limit).
@@ -501,16 +410,8 @@ async function findTranscript($: EngineInterface) {
 async function refreshTitle($: EngineInterface) {
   const path = await findTranscript($)
   if (!path) return
-  // The transcript can be several MB, so let grep pick out the title entries; the last custom title wins over the last generated one.
-  const r = await $.process.run(['grep', '-o', '-E', '"(customTitle|aiTitle)":"[^"]*"', path], { timeoutMs: 5_000 }).catch(() => undefined)
-  const lines = r?.stdout.split('\n').filter(Boolean) ?? []
-  const line = lines.findLast(l => l.startsWith('"customTitle"')) ?? lines.findLast(l => l.startsWith('"aiTitle"'))
-  let next: string | undefined
-  try {
-    next = line ? Object.values(JSON.parse(`{${line}}`) as Record<string, string>)[0] : undefined
-  } catch {
-    next = undefined
-  }
+  const r = await $.process.run(titleArgv(path), { timeoutMs: 5_000 }).catch(() => undefined)
+  const next = parseTitle(r?.stdout)
   if (next && next !== title) {
     title = next
     $.ui.invalidate('ui.render')
@@ -582,29 +483,19 @@ async function openDefault($: EngineInterface, target: string) {
   await $.process.run(['setsid', '-f', `${BIN}/asint-open`, target], { timeoutMs: 10_000 }).catch(() => undefined)
 }
 
-// Images, video and documents go to the system default app (imv for images, evince for PDF, Brave for web pages, Markdown per xdg-mime); code and config open in nvim in a new terminal.
-const RENDERED = /\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mkv|mov|mp3|wav|ogg|flac|pdf|html?|md|markdown|txt|csv|docx?|xlsx?|pptx?|odt|ods|odp)$/i
-
+/** Web pages open beside the terminal, everything else in its own app (see openArgv). */
 async function openFile($: EngineInterface, path: string) {
   if (/\.html?$/i.test(path)) return openExternal($, path)
-  const argv = RENDERED.test(path) ? [`${BIN}/asint-open`, path] : ['xdg-terminal-exec', 'nvim', path]
-  await $.process.run(['setsid', '-f', ...argv], { timeoutMs: 10_000 }).catch(() => undefined)
+  await $.process.run(openArgv(BIN, path), { timeoutMs: 10_000 }).catch(() => undefined)
 }
-
-const slug = (path: string) => path.replace(/[^A-Za-z0-9]+/g, '_').slice(-80)
 
 /** Convert a media file to PNG frames (~/.local/bin/media-prep) and register it; 3D models open in terminal-browser. Returns the media id. */
 async function addMedia($: EngineInterface, path: string) {
-  const r = await $.process.run([`${BIN}/media-prep`, path, `${MEDIA_CACHE}/${slug(path)}`], { timeoutMs: 120_000 }).catch(() => undefined)
+  const r = await $.process.run(prepArgv(BIN, path), { timeoutMs: 120_000 }).catch(() => undefined)
   if (!r || r.exitCode !== 0) return undefined
-  const prepped = JSON.parse(r.stdout) as { kind: string; width: number; height: number; fps: number; frames: string[]; viewer?: string }
-  const isModel = prepped.kind === 'model'
-  if (isModel && prepped.viewer) await openDefault($, prepped.viewer)
-  const m = registerMedia(S, {
-    kind: mediaKind(path, prepped.frames.length, isModel), path, at: await $.clock.now(),
-    width: prepped.width, height: prepped.height, fps: prepped.fps, frames: prepped.frames, viewer: prepped.viewer,
-  })
-  log(S, { at: m.at, who: 'main', kind: 'media', text: `${m.id} ${path}` })
+  const prepped = JSON.parse(r.stdout) as Prepped
+  if (prepped.kind === 'model' && prepped.viewer) await openDefault($, prepped.viewer)
+  const m = addPrepped(S, path, prepped, await $.clock.now())
   ui.selMedia = m.id
   mediaFrame = 0
   markFresh('media')
@@ -679,7 +570,6 @@ function applyVim(effect: VimEffect | undefined) {
   if (effect.toggle) act?.treeToggle(effect.toggle)
 }
 
-
 /** Keys from the tree client, in order, each handled once however many times the client posts its queue. */
 function treeKeys(epoch: string, keys: { n: number; key: string }[]) {
   if (!project) return
@@ -731,23 +621,14 @@ async function suggestRootFor($: EngineInterface, abs: string) {
   }
 }
 
-/** Jump FILES to this file: expand its folders, select it, scroll it into view and switch its cell to the FILES tab. */
+/** Jump FILES to this file (see followFile) and switch its cell to the FILES tab; never while the user's own click holds the tree. */
 function followTo(abs: string) {
-  if (!ui.follow || !project || Date.now() - manualAt < MANUAL_HOLD_MS) return
-  if (!abs.startsWith(`${project.root}/`)) return
-  const rel = abs.slice(project.root.length + 1)
-  if (ui.treeSel === rel && isShown(shown(), 'project')) return
-  // A new file isn't in the list yet: add it now; the next rescan picks it up for real.
-  if (!project.paths.includes(rel)) project = { ...project, paths: [...project.paths, rel] }
-  const parts = rel.split('/')
-  for (let i = 1; i < parts.length; i++) ui.treeOpen[parts.slice(0, i).join('/')] = true
-  ui.treeSel = rel
-  ui.scroll['project:detail'] = 0
-  const idx = treeRows(project.paths, ui.treeOpen).findIndex(r => r.path === rel)
-  ui.scroll.project = Math.max(0, idx - 3)
-  if (!ui.zen) layout = focusPanel(layout, 'project')
-  else if (ui.zen !== 'project') return
-  lastPanel = 'project'
+  if (!project || Date.now() - manualAt < MANUAL_HOLD_MS) return
+  const f = followFile(ui, project, abs, isShown(shown(), 'project'))
+  if (!f) return
+  project = f.project
+  if (f.focus) layout = focusPanel(layout, 'project')
+  if (f.last) lastPanel = 'project'
 }
 
 function liveFrame($: EngineInterface, force = false) {
@@ -765,9 +646,8 @@ async function finishLive($: EngineInterface, id: string, path: string | undefin
   if (ok && path) {
     const text = await $.fs.read(path).catch(() => undefined)
     if (typeof text === 'string') {
-      const n = body.new.split('\n').length
-      const from = body.tool === 'Write' ? 0 : Math.max(0, lineOf(text, body.new))
-      flash = { path, from, to: from + n - 1, until: Date.now() + FLASH_MS }
+      const { from, to } = editedLines(body, text)
+      flash = { path, from, to, until: Date.now() + FLASH_MS }
       // After the highlight, the normal preview should stay on the changed lines, not jump to the top of the file.
       if (project && path === `${project.root}/${ui.treeSel}`) ui.scroll['project:detail'] = Math.max(0, from - 3)
     }
@@ -782,34 +662,21 @@ const preparing = new Set<string>()
 async function prepPreview($: EngineInterface, path: string) {
   if (preparing.has(path)) return
   preparing.add(path)
-  const r = await $.process.run([`${BIN}/media-prep`, path, `${MEDIA_CACHE}/preview-${slug(path)}`], { timeoutMs: 120_000 }).catch(() => undefined)
-  try {
-    const prepped = r && r.exitCode === 0 ? (JSON.parse(r.stdout) as { width: number; height: number; frames: string[] }) : undefined
-    if (prepped?.frames[0]) {
-      previews.set(path, { frame: prepped.frames[0], width: prepped.width, height: prepped.height })
-      $.ui.invalidate('ui.render')
-    }
-  } catch {
-    // If conversion fails, keep the text placeholder.
+  const r = await $.process.run(prepArgv(BIN, path, true), { timeoutMs: 120_000 }).catch(() => undefined)
+  // If conversion fails, keep the text placeholder.
+  const hit = r && r.exitCode === 0 ? previewOf(r.stdout) : undefined
+  if (hit) {
+    previews.set(path, hit)
+    $.ui.invalidate('ui.render')
   }
 }
 
-/** Media files written after `since` (epoch seconds) in cwd (3 levels deep) and the scratchpad. */
+/** Media files written after `since` (epoch seconds) in cwd and the scratchpad, minus asint's and Claude's own scratch files. */
 async function newMediaSince($: EngineInterface, since: number) {
   const dir = await findSessionDir($)
   const dirs = [await $.session.cwd(), dir ? `${dir}/scratchpad` : undefined].filter((d): d is string => !!d)
-  const r = await $.process.run(
-    ['find', ...new Set(dirs), '-maxdepth', '3', '(', '-name', '.*', '-o', '-name', 'node_modules', '-o', '-path', `${MEDIA_CACHE}*`, ')', '-prune', '-o',
-      '-type', 'f', '-newermt', `@${since}`, '-print'],
-    { timeoutMs: 10_000 },
-  ).catch(() => undefined)
-  return (r?.stdout ?? '').split('\n').filter(isMedia).slice(0, 3)
-}
-
-/** One-line summary of a tool call, for the Log tab and an agent's "doing" field. */
-const summary = (tool: string, input: Record<string, unknown>) => {
-  const arg = input.file_path ?? input.path ?? input.pattern ?? input.command ?? input.url ?? input.query ?? input.description ?? ''
-  return `${tool} ${String(arg).split('\n')[0]}`.slice(0, 160)
+  const r = await $.process.run(newMediaArgv(dirs, since), { timeoutMs: 10_000 }).catch(() => undefined)
+  return newMediaOf(r?.stdout ?? '')
 }
 
 async function setMinimized($: EngineInterface, v: boolean) {
@@ -854,14 +721,6 @@ async function toggleZen($: EngineInterface, t?: Panel) {
   $.ui.invalidate('ui.render')
 }
 
-// Panels that use the o key: in zen, the current cell gets it; otherwise the most recently used panel that is visible; failing that, the first visible in this order.
-const O_PANELS: Panel[] = ['files', 'project', 'arch']
-function oOwner(): Panel {
-  if (ui.zen && O_PANELS.includes(ui.zen)) return ui.zen
-  if (O_PANELS.includes(lastPanel) && isShown(shown(), lastPanel)) return lastPanel
-  return O_PANELS.find(t => isShown(shown(), t)) ?? 'files'
-}
-
 /**
  * Messages sent to agents from the MAP: main goes through prompt.submit (same as the user typing; queued while a turn runs),
  * subagents through session.send (a finished one is woken up), and "all" goes to every running subagent.
@@ -871,52 +730,32 @@ async function sendTo($: EngineInterface, to: string, text: string) {
   if (!body) return
   ui.msgTo = undefined
   $.ui.invalidate('ui.render')
-  const ids = to === 'all' ? [...S.agents.values()].filter(a => a.status === 'running').map(a => a.id) : [to]
-  const tag = (id: string) => (id === 'main' ? '[M]' : `[${[...S.agents.values()].sort((a, b) => a.startedAt - b.startedAt).findIndex(a => a.id === id) + 1}]`)
+  const ids = sendTargets(S, to)
   const failed: string[] = []
   for (const id of ids) {
     try {
       if (id === 'main') await $.prompt.submit({ text: body, asUser: true })
       else {
         const r = await $.session.send({ to: { agentId: id }, text: body })
-        if (!r.isDelivered) failed.push(`${tag(id)} ${r.reason}`)
+        if (!r.isDelivered) failed.push(`${agentTag(S, id)} ${r.reason}`)
       }
     } catch (err) {
-      failed.push(`${tag(id)} ${err instanceof Error ? err.message : String(err)}`)
+      failed.push(`${agentTag(S, id)} ${err instanceof Error ? err.message : String(err)}`)
     }
   }
   const at = await $.clock.now()
-  log(S, { at, who: 'main', kind: failed.length ? 'error' : 'tool', text: t(`你 → ${to === 'all' ? '全部' : tag(to)}：${body}`, `You → ${to === 'all' ? 'all' : tag(to)}: ${body}`).slice(0, 160) })
-  $.ui.toast(failed.length
-    ? t(`沒送到：${failed.join('；')}`, `Not delivered: ${failed.join('; ')}`)
-    : t(`已送給 ${to === 'all' ? `${ids.length} 個 subagent` : tag(to)}`, `Sent to ${to === 'all' ? `${ids.length} subagent${ids.length === 1 ? '' : 's'}` : tag(to)}`))
+  const report = sendReport(S, to, body, ids, failed)
+  log(S, { at, who: 'main', kind: failed.length ? 'error' : 'tool', text: report.log })
+  $.ui.toast(report.toast)
   $.ui.invalidate('ui.render')
 }
 
-// Claude's own screenshots and asint's scratch files (hidden dirs in the scratchpad, ~/.cache/asint) stay out of CHANGES and MEDIA.
-const isOwnScratch = (path: string) => /\/scratchpad\/\./.test(path) || path.includes('/.cache/asint/')
-
 // ── Output handling (sub-project C, replaces terminal-only) ──────────────────
 
-const OUTPUT_RULE = `# Keep deliverables in the terminal
-
-Write plans, specs, reports, analyses, drafts, tables and diagrams as Markdown in your reply so the terminal shows them. Do not create Claude Docs documents.
-
-When something needs to be a web page: write the .html to a file and publish it with the Artifact tool as usual (private). asint opens the local file in a browser next to the terminal (terminal-browser) and lists it under WEB in the dashboard's MEDIA panel, so your reply only needs the Artifact link and the local path, not a text copy. For pages that need trackpad zoom the user opens them with \`/html -b <path>\` in the system browser.`
-
-const CHECKLIST_RULE = `# Checklist
-
-For any task with three or more steps, call mcp__asint__checklist before the first step, send the full list on every call, mark one item in_progress while you work on it and completed as soon as it is done.`
-
-const DOCS_DENY = 'asint: the user wants deliverables written in the reply (shown in the terminal), not as Claude Docs documents. Write it as Markdown in your reply instead.'
-
-/** List an .html file under WEB in MEDIA (no frames; clicking opens it in a browser). */
+/** List an .html file under WEB in MEDIA and select it. */
 function addWeb(path: string, at: number, url?: string) {
-  const m = registerMedia(S, { kind: 'WEB', path, at, width: 0, height: 0, fps: 0, frames: [], ...(url ? { url } : {}) })
-  log(S, { at, who: 'main', kind: 'media', text: `${m.id} ${path}${url ? ` → ${url}` : ''}` })
-  ui.selMedia = m.id
+  ui.selMedia = addWebPage(S, path, at, url).id
   markFresh('media')
-  return m
 }
 
 /** Dashboard button callbacks; everything that needs $ (saving settings, opening externally, redrawing) is wired up here. */
@@ -936,50 +775,14 @@ function makeActions($: EngineInterface): Actions {
     zen: t => void toggleZen($, t),
     archPress: (n: ArchNode) => {
       lastPanel = 'arch'
-      // First click selects; clicking a selected node that can drill down enters it.
-      if (ui.archSel === n.id && n.navigateTo) {
-        const model = arch?.model
-        const trail = ui.archTrail.length ? ui.archTrail : model ? [model.first] : []
-        ui.archTrail = [...trail, n.navigateTo]
-        ui.archSel = undefined
-        ui.archPanX = 0
-        ui.scroll.arch = 0
-      } else if (ui.archSel === n.id && n.repo && arch) {
-        // A system-layer element pointing at a repo: switch to that repo's docs/ diagram and add a breadcrumb.
-        ui.archDirs = [...ui.archDirs, `${joinPath(arch.dir, n.repo)}/docs`]
-        ui.archTrail = []
-        ui.archSel = undefined
-        ui.archPanX = 0
-        ui.scroll.arch = 0
-        void refreshArch($)
-      } else ui.archSel = n.id
+      if (archPress(ui, n, arch)) void refreshArch($)
       redraw()
     },
-    archUp: i => {
-      lastPanel = 'arch'
-      ui.archDirs = ui.archDirs.slice(0, i + 1)
-      ui.archTrail = []
-      ui.archSel = undefined
-      ui.archPanX = 0
-      ui.scroll.arch = 0
-      void refreshArch($)
-      redraw()
-    },
-    archTrail: i => {
-      lastPanel = 'arch'
-      ui.archTrail = ui.archTrail.slice(0, i + 1)
-      ui.archSel = undefined
-      ui.archPanX = 0
-      ui.scroll.arch = 0
-      redraw()
-    },
+    archUp: i => { lastPanel = 'arch'; archUp(ui, i); void refreshArch($); redraw() },
+    archTrail: i => { lastPanel = 'arch'; archBack(ui, i); redraw() },
     treeToggle: dir => {
       lastPanel = 'project'
-      // A folder holding changed files is open without being in treeOpen; closing it is remembered in treeShut.
-      const hot = project ? projectRows(project, S.files, gitState, live?.path, ui).hot : new Map<string, number>()
-      const isOpen = !!ui.treeOpen[dir] || (hot.has(dir) && !ui.treeShut[dir])
-      if (isOpen) { delete ui.treeOpen[dir]; ui.treeShut[dir] = true }
-      else { delete ui.treeShut[dir]; ui.treeOpen[dir] = true }
+      toggleDir(ui, dir, project ? projectRows(project, S.files, gitState, live?.path, ui).hot : new Map<string, number>())
       redraw()
     },
     vim: (panel, key) => {
@@ -990,26 +793,18 @@ function makeActions($: EngineInterface): Actions {
     },
     setRoot: dir => {
       lastPanel = 'project'
-      ui.treeRoot = dir
+      resetTree(ui, dir)
       suggestRoot = undefined
       project = undefined
       gitState = new Map()
-      ui.treeOpen = {}; ui.treeShut = {}; ui.treeSel = undefined; ui.treeCur = undefined
       redraw()
       void refreshProject($)
     },
     toggleChanged: () => { lastPanel = 'project'; ui.treeChanged = !ui.treeChanged; redraw() },
     toggleFollow: () => { ui.follow = !ui.follow; redraw() },
-    treeSelect: path => {
-      manualAt = Date.now()
-      lastPanel = 'project'
-      ui.treeSel = path
-      ui.scroll['project:detail'] = 0
-      ui.hx['project:detail'] = 0
-      redraw()
-    },
-    hpan: (key, dx, max) => { lastPanel = key.split(':')[0] as Panel; ui.hx[key] = Math.min(max, Math.max(0, (ui.hx[key] ?? 0) + dx)); redraw() },
-    vpan: (key, dy) => { lastPanel = key.split(':')[0] as Panel; ui.scroll[key] = Math.min(scrollMax.get(key) ?? 0, Math.max(0, (ui.scroll[key] ?? 0) + (key === 'exec:detail' ? -dy : dy))); redraw() },
+    treeSelect: path => { manualAt = Date.now(); lastPanel = 'project'; selectTreeFile(ui, path); redraw() },
+    hpan: (key, dx, max) => { lastPanel = panelOf(key); nudge(ui.hx, key, dx, max); redraw() },
+    vpan: (key, dy) => { lastPanel = panelOf(key); nudge(ui.scroll, key, scrollSign(key) * dy, scrollMax.get(key) ?? 0); redraw() },
     archPan: dx => { lastPanel = 'arch'; ui.archPanX = Math.max(0, ui.archPanX + dx); redraw() },
     archOpen: () => {
       if (!arch?.model) return
@@ -1018,36 +813,20 @@ function makeActions($: EngineInterface): Actions {
     },
     minimize: () => void minimize($),
     mapView: v => { ui.mapView = v; mapCells = ''; redraw() },
-    openMsg: (to, at) => {
-      lastPanel = 'map'
-      const closing = ui.msgTo === to && ui.msgAt === at
-      ui.msgTo = closing ? undefined : to
-      ui.msgAt = closing ? undefined : at
-      redraw()
-    },
+    openMsg: (to, at) => { lastPanel = 'map'; toggleMsg(ui, to, at); redraw() },
     closeMsg: () => { ui.msgTo = undefined; redraw() },
     sendMsg: (to, text) => void sendTo($, to, text),
     nextCombo: () => { ui.comboSlot = ui.comboSlot === 0 ? 1 : 0; redraw() },
     focusAgent: id => { ui.focusAgent = id; redraw() },
-    selFile: path => { lastPanel = 'files'; ui.selFile = path; ui.fullFile = false; ui.hx['files:detail'] = 0; redraw() },
+    selFile: path => { lastPanel = 'files'; selectFile(ui, path); redraw() },
     toggleFull: () => { ui.fullFile = !ui.fullFile; redraw() },
     toggleReads: () => { ui.showReads = !ui.showReads; redraw() },
     openExternal: path => void openFile($, path),
     openUrl: url => void openDefault($, url),
     selExec: id => { ui.selExec = ui.selExec === id ? undefined : id; redraw() },
-    // Opening a card also narrows CHANGES to that agent's files and selects the newest of them; closing it lifts the filter.
-    selAgent: id => {
-      lastPanel = 'orch'
-      ui.selAgent = ui.selAgent === id ? undefined : id
-      ui.filesBy = ui.selAgent
-      if (ui.selAgent) {
-        const newest = changesList(S, { showReads: ui.showReads, by: ui.selAgent })[0]
-        if (newest) { ui.selFile = newest.path; ui.fullFile = false; ui.hx['files:detail'] = 0; ui.scroll['files:detail'] = 0 }
-      }
-      redraw()
-    },
+    selAgent: id => { lastPanel = 'orch'; toggleAgent(ui, S, id); redraw() },
     clearFilesBy: () => { ui.filesBy = undefined; redraw() },
-    selTodo: key => { lastPanel = 'todo'; ui.selTodo = key; ui.selStep = undefined; ui.scroll['todo:detail'] = 0; redraw() },
+    selTodo: key => { lastPanel = 'todo'; selectTodo(ui, key); redraw() },
     selStep: id => { ui.selStep = ui.selStep === id ? undefined : id; redraw() },
     gotoExec: id => { ui.selExec = id; act.focusPanel('exec') },
     mediaFilter: f => { ui.mediaFilter = f; redraw() },
@@ -1079,31 +858,8 @@ export const register: Register = on => {
     $.clock.every(THEME_POLL_MS, () => void loadTheme($))
     $.clock.every(TICK_MS, () => void tick($))
     await $.command.register({ name: 'skin', description: t('儀表板配色：/skin hacker 磷光、/skin omarchy 跟主題；聊天欄一律磷光', 'Dashboard colors: /skin hacker for phosphor, /skin omarchy to follow the theme; the chat column is always phosphor') })
-    // This Claude Code version has no TodoWrite/TaskCreate, so the agent can't make a checklist; asint provides one.
-    // isDeferred: false keeps it out of tool search; a deferred tool is never loaded unless the agent searches for it.
-    await $.tool.register({
-      name: 'checklist',
-      isDeferred: false,
-      description: 'Show a step checklist in the asint dashboard so the user can follow progress. Send the FULL list every call; mark an item in_progress when you start it and completed as soon as it is done.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          todos: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                content: { type: 'string', description: 'What the step is' },
-                status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
-                activeForm: { type: 'string', description: 'Present-continuous form shown while in progress' },
-              },
-              required: ['content', 'status'],
-            },
-          },
-        },
-        required: ['todos'],
-      },
-    }).catch(() => undefined)
+    // The checklist tool stands in for TodoWrite/TaskCreate, which this Claude Code version lacks (rules.ts).
+    await $.tool.register(CHECKLIST_SPEC).catch(() => undefined)
     await $.command.register({ name: 'asint', description: t('打開 asint 儀表板；/asint edit 編輯版面、/asint root <資料夾> 換 FILES 的資料夾、/asint reset 還原、/asint arch 檢查或建立架構圖', 'Open the asint dashboard; /asint edit to edit the layout, /asint reset to restore it, /asint arch to check or create the architecture diagram') })
     await $.command.register({ name: 'html', description: t('打開網頁：/html <路徑或網址> 在終端機旁邊；/html -b <…> 用 Brave', 'Open a web page: /html <path or URL> beside the terminal; /html -b <…> in Brave') })
 
@@ -1191,15 +947,13 @@ export const register: Register = on => {
     const sections = [...r.sections, { id: 'asint:output', text: OUTPUT_RULE, scope: 'session' as const }, { id: 'asint:checklist', text: CHECKLIST_RULE, scope: 'session' as const }]
     const dirs = await archBaseDirs($).catch(() => [] as string[])
     const paths: string[] = []
-    for (const d of dirs) for (const f of await $.fs.list(d).catch(() => [])) if (f.kind === 'file' && ARCH_EXT.test(f.name)) paths.push(`${d}/${f.name}`)
-    if (paths.length) sections.push({ id: 'asint:arch', scope: 'session' as const, text: archRule(paths) })
+    for (const d of dirs) for (const f of await $.fs.list(d).catch(() => [])) if (isC4File(f)) paths.push(`${d}/${f.name}`)
+    if (paths.length) sections.push({ id: 'asint:arch', scope: 'session' as const, text: archRule(paths, likec4Label(LIKEC4)) })
     return { ...r, sections }
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'html' }, async ($, e) => {
-    const args = e.args.trim().split(/\s+/).filter(Boolean)
-    const brave = args[0] === '-b'
-    const raw = (brave || args[0] === '-t' ? args.slice(1) : args).join(' ')
+    const { brave, raw } = htmlArgs(e.args)
     if (!raw) return { text: t('用法：/html <路徑或網址>（終端機旁邊的瀏覽器）；/html -b <路徑或網址>（Brave，要觸控板手勢時用）', 'Usage: /html <path or URL> (browser beside the terminal); /html -b <path or URL> (Brave, for trackpad gestures)') }
     const home = await $.env.get('HOME')
     const target = raw.replace(/^~(?=\/)/, home ?? '~')
@@ -1208,15 +962,13 @@ export const register: Register = on => {
     return { text: brave ? t(`已在 Brave 打開 ${target}`, `Opened ${target} in Brave`) : t(`已在終端機旁邊打開 ${target}`, `Opened ${target} beside the terminal`) }
   })
 
-
   // Artifacts publish as usual; when the published file is .html, also open the local copy in a browser and record the link in MEDIA.
   on('tool.call', { tool: 'Artifact' }, async ($, e, next) => {
     const r = await next(e)
     try {
       const input = e as { action?: string; file_path?: string }
       if ((input.action ?? 'publish') === 'publish' && r.deny === undefined && !r.isError && input.file_path?.endsWith('.html')) {
-        const url = /https:\/\/claude\.ai\/[^\s"'<>)]+/.exec(`${r.text ?? ''} ${JSON.stringify(r.result ?? '')}`)?.[0]
-        addWeb(input.file_path, await $.clock.now(), url)
+        addWeb(input.file_path, await $.clock.now(), artifactUrl(r.text, r.result))
         await openExternal($, input.file_path)
         $.ui.invalidate('ui.render')
       }
@@ -1227,13 +979,10 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.scroll', { requestId: PANE }, async ($, e) => {
-    const key = scrollKeyAt(e.pointer)
+    const key = scrollKeyAt(shown(), paneSize, e.pointer, lastPanel, ui.splitRatio)
     if (!key) return { deny: t('asint：這裡沒有可捲動的內容', 'asint: nothing to scroll here') }
-    lastPanel = key.split(':')[0] as Panel
-    const max = scrollMax.get(key) ?? 0
-    // For output (Exec detail, Log), scrolling up shows older content; elsewhere scrolling down shows more.
-    const sign = key === 'exec:detail' ? -1 : 1
-    ui.scroll[key] = Math.min(max, Math.max(0, (ui.scroll[key] ?? 0) + sign * e.by * 3))
+    lastPanel = panelOf(key)
+    nudge(ui.scroll, key, scrollSign(key) * e.by * 3, scrollMax.get(key) ?? 0)
     $.ui.invalidate('ui.render')
     return { deny: t('asint：捲動的是卡片內容', 'asint: scrolling the card contents') }
   }).catch(() => ({ deny: t('asint：捲動失敗', 'asint: scroll failed') }))
@@ -1253,7 +1002,7 @@ export const register: Register = on => {
       if (kind === 'exec') { lastPanel = 'exec'; ui.selExec = id }
       else if (kind === 'file') act.treeSelect(id)
       else if (kind === 'dir') act.treeToggle(id)
-      else if (kind === 'todo') { lastPanel = 'todo'; ui.selTodo = id; ui.selStep = undefined; ui.scroll['todo:detail'] = 0 }
+      else if (kind === 'todo') { lastPanel = 'todo'; selectTodo(ui, id) }
       $.ui.invalidate('ui.render')
       if (!paneFocused) void $.ui.open({ id: PANE, title: paneTitle(), focus: true, ...(requestedCols ? { columns: requestedCols } : {}) }).catch(() => undefined)
       return next(e)
@@ -1337,7 +1086,7 @@ export const register: Register = on => {
     if (e.agentId) {
       const a = S.agents.get(e.agentId)
       if (a) upsertAgent(S, { ...a, status: e.reason === 'error' ? 'error' : 'done', endedAt: now, doing: undefined })
-      log(S, { at: now, who: e.agentId, kind: 'agent', text: t(`完成 ${fmtSec(e.durationMs)}`, `Done ${fmtSec(e.durationMs)}`) })
+      log(S, { at: now, who: e.agentId, kind: 'agent', text: t(`完成 ${formatDuration(e.durationMs)}`, `Done ${formatDuration(e.durationMs)}`) })
     } else {
       S.vitals.turnRunning = false
       hadReply = true
@@ -1367,36 +1116,24 @@ export const register: Register = on => {
   on('session.append', ($, e, next) => {
     for (const b of e.message.content) {
       if (b.type !== 'text' || typeof b.text !== 'string' || !b.text.includes('<task-notification>')) continue
-      const id = /<task-id>([^<]+)<\/task-id>/.exec(b.text)?.[1]
-      const status = /<status>([^<]+)<\/status>/.exec(b.text)?.[1]
-      if (endAgentFromNotification(S, b.text, Date.now())) $.ui.invalidate('ui.render')
-      const x = id ? S.execs.find(y => y.outputPath?.endsWith(`/${id}.output`)) : undefined
-      if (x && x.status === 'background') {
-        x.status = status === 'completed' ? 'ok' : 'error'
-        x.exit = Number(/exit code (\d+)/.exec(b.text)?.[1] ?? (status === 'completed' ? 0 : 1))
-        x.endedAt = Date.now()
-        x.stdout = bgOutput.get(x.id) ?? x.stdout
-        $.ui.invalidate('ui.render')
-      }
+      if (endTask(S, b.text, bgOutput, Date.now())) $.ui.invalidate('ui.render')
     }
     return next(e)
   })
 
-
   // Every tool call: Bash goes to Exec, file tools to Files, checklist tools to Todo, the rest to Log; afterwards look for new media.
   on('tool.call', async ($, e, next) => {
     // Never create Claude Docs documents: deliverables go in the reply.
-    if (e.tool.startsWith('mcp__claude_ai_Claude_Docs__') && (e.tool.endsWith('__create') || JSON.stringify(e).includes('"create"'))) return { deny: DOCS_DENY }
+    if (isDocsCreate(e)) return { deny: DOCS_DENY }
     const at = await $.clock.now()
     const who = e.agentId ?? 'main'
     const input = e as unknown as Record<string, unknown> & { tool: string; tool_use_id: string }
     if ((e.tool as string) === CHECKLIST_TOOL) {
-      if (!Array.isArray(input.todos)) return { isError: true, result: 'todos must be an array', text: 'todos must be an array' }
-      applyTodoWrite(S, input.todos as { content: string; status: TodoStatus; activeForm?: string }[], who, at)
+      const r = applyChecklist(S, input.todos, who, at)
+      if ('error' in r) return { isError: true, result: r.error, text: r.error }
       markFresh('todo')
       $.ui.invalidate('ui.render')
-      const done = S.todos.filter(t => t.status === 'completed').length
-      return { result: `checklist ${done}/${S.todos.length}`, text: `checklist ${done}/${S.todos.length}` } as never
+      return { result: r.text, text: r.text } as never
     }
     const line = summary(e.tool, input)
     const brief = briefTool(e.tool, input)
@@ -1416,69 +1153,29 @@ export const register: Register = on => {
       const result = (ran.result ?? {}) as Record<string, unknown>
       const failed = ran.deny !== undefined || ran.isError === true
       const path = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : undefined
-      switch (e.tool) {
-        case 'Bash': {
-          const x = S.execs.find(y => y.id === input.tool_use_id)
-          if (x) {
-            x.endedAt = end
-            x.stdout = String(result.stdout ?? '').slice(-50_000)
-            x.stderr = String(result.stderr ?? ran.text ?? '').slice(-20_000)
-            if (typeof result.backgroundTaskId === 'string') {
-              x.status = 'background'
-              const dir = await findSessionDir($)
-              if (dir) x.outputPath = `${dir}/tasks/${result.backgroundTaskId}.output`
-            } else {
-              x.status = failed ? 'error' : 'ok'
-              x.exit = failed ? (exitCodeOf(ran.text) ?? 1) : 0
-            }
-          }
-          log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line, brief, op: failed ? 'X' : 'B' })
-          markFresh('exec')
-          void refreshLocation($); void refreshProject($)
-          if (!failed) for (const m of (await newMediaSince($, Math.floor(at / 1000) - 1)).filter(x => !isOwnScratch(x))) {
-            const id = await addMedia($, m)
-            if (id) notes.push(`asint: ${id} = ${m}`)
-          }
-          break
+      if (e.tool === 'Bash') {
+        const x = S.execs.find(y => y.id === input.tool_use_id)
+        const taskId = x ? endExec(x, result, ran.text, failed, end) : undefined
+        if (x && taskId) {
+          const dir = await findSessionDir($)
+          if (dir) x.outputPath = taskOutput(dir, taskId)
         }
-        case 'Read':
-          // Claude's own screenshots (hidden dirs in the scratchpad, e.g. .shots/) stay out of FILES.
-          if (path && !failed && !isOwnScratch(path)) {
-            touchFile(S, path, 'R', who, end)
-            markFresh('files')
-            log(S, { at: end, who, kind: 'tool', text: line, brief, op: 'R', file: path })
-          }
-          break
-        case 'Edit':
-        case 'NotebookEdit':
-        case 'Write':
-          void finishLive($, input.tool_use_id, path, !failed)
-          if (path && !failed) {
-            const created = e.tool === 'Write' && result.type === 'create'
-            touchFile(S, path, created ? 'A' : 'M', who, end, patchLines(result.structuredPatch as never))
-            markFresh('files')
-            log(S, { at: end, who, kind: 'tool', text: line, brief, op: created ? 'W' : 'E', file: path })
-            if (/\.html?$/i.test(path) && !isOwnScratch(path)) addWeb(path, end)
-            if (isMedia(path)) {
-              const id = await addMedia($, path)
-              if (id) notes.push(`asint: ${id} = ${path}`)
-            }
-          }
-          break
-        case 'TodoWrite':
-          if (Array.isArray(input.todos)) applyTodoWrite(S, input.todos as { content: string; status: TodoStatus; activeForm?: string }[], who, end)
-          markFresh('todo')
-          break
-        case 'TaskCreate': {
-          const task = (result.task ?? {}) as { id?: string }
-          if (task.id) applyTaskCreate(S, task.id, String(input.subject ?? ''), input.activeForm as string | undefined, end)
-          break
+        log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line, brief, op: failed ? 'X' : 'B' })
+        markFresh('exec')
+        void refreshLocation($); void refreshProject($)
+        if (!failed) for (const m of await newMediaSince($, Math.floor(at / 1000) - 1)) {
+          const id = await addMedia($, m)
+          if (id) notes.push(`asint: ${id} = ${m}`)
         }
-        case 'TaskUpdate':
-          if (typeof input.taskId === 'string') applyTaskUpdate(S, input.taskId, input as never, who, end)
-          break
-        default:
-          log(S, { at: end, who, kind: failed ? 'error' : 'tool', text: line, brief })
+      } else {
+        if (e.tool === 'Edit' || e.tool === 'NotebookEdit' || e.tool === 'Write') void finishLive($, input.tool_use_id, path, !failed)
+        const fx = recordTool(S, e.tool, input, result, { failed, path, who, at: end, line, brief })
+        if (fx.fresh) markFresh(fx.fresh)
+        if (fx.web) addWeb(fx.web, end)
+        if (fx.media) {
+          const id = await addMedia($, fx.media)
+          if (id) notes.push(`asint: ${id} = ${fx.media}`)
+        }
       }
     } catch {
       // A logging failure doesn't affect the tool's result.
@@ -1577,7 +1274,7 @@ export const register: Register = on => {
     for (const t of PANELS) if (isShown(shown(), t)) fresh.delete(t)
 
     const ctx: ViewCtx = { el, s: S, ui, p, skin: sk, now, width, rows, act, fileText, map, bgOutput, mediaFrame, fresh: [...fresh], scrollMax, arch, archUpper: ui.archDirs.slice(0, -1).map(archDirLabel), filePreview, project, git: gitState, suggestRoot, treeAck, treeText, treePreview, live, flash,
-      oOwner: oOwner(), current: paneFocused ? (ui.zen ?? (isShown(shown(), lastPanel) ? lastPanel : undefined)) : undefined }
+      oOwner: oOwner(ui.zen, lastPanel, shown()), current: paneFocused ? (ui.zen ?? (isShown(shown(), lastPanel) ? lastPanel : undefined)) : undefined }
     try {
       return dashboard(ctx, shown())
     } catch (err) {
@@ -1720,5 +1417,3 @@ export const register: Register = on => {
     )
   })
 }
-
-const fmtSec = (ms: number) => formatDuration(ms)

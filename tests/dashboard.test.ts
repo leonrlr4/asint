@@ -693,3 +693,163 @@ test('project listing: git for a repository, find for a folder; paths lose the r
   expect(cut.truncated).toBe(true)
   expect(gitQueries(0).committed[3]).toBe('--since=1970-01-01T00:00:00.000Z')
 })
+
+import { archBaseFrom, archBack, archDirLabel, archPress, archPrune, archStamp, archUp, joinPath, likec4Errors, likec4Label } from '../hooks/archdir'
+import { followFile, keepActive, nudge, oOwner, scrollSign, toggleAgent, toggleDir, toggleMsg } from '../hooks/viewstate'
+import { agentTag, applyChecklist, endExec, endTask, isDocsCreate, parseTitle, prettyModel, recordTool, sendReport, summary } from '../hooks/events'
+import { artifactUrl, htmlArgs, newMediaOf, openArgv, prepArgv, previewOf } from '../hooks/media'
+import { editedLines } from '../hooks/live'
+import type { UiState } from '../hooks/views'
+import type { Exec } from '../hooks/model'
+
+const freshUi = (): UiState => ({
+  tab: 'files', mapView: 'combo', comboSlot: 0, fullFile: false, showReads: true, mediaFilter: 'ALL', scroll: {},
+  archTrail: [], archDirs: [], archPanX: 0, hx: {}, splitRatio: {}, treeShut: {}, treeChanged: false, treeFocus: 'tree', filesFocus: 'list', treeOpen: {}, follow: true,
+})
+
+test('arch folders: repo paths resolve against the diagram, the trail starts at the system layer, labels name the workspace or repo', () => {
+  expect(joinPath('/w/vault/02-Architecture/system-maps', '../../../api')).toBe('/w/api')
+  expect(joinPath('/x', '/abs/./y')).toBe('/abs/y')
+  expect(archBaseFrom('/w/api', '/w/vault/02-Architecture/system-maps', '/w/api/src')).toEqual(['/w/vault/02-Architecture/system-maps', '/w/api/docs'])
+  expect(archBaseFrom(undefined, undefined, '/tmp/x')).toEqual(['/tmp/x/docs'])
+  expect(archDirLabel('/home/me/acme/vault/02-Architecture/system-maps')).toBe('acme')
+  expect(archDirLabel('/home/me/api/docs')).toBe('api')
+  expect(likec4Label(['npx', '-y', 'likec4@1'])).toBe('npx likec4')
+  expect(likec4Errors('\x1b[31mLine 3: bad\x1b[0m\nnoise\nError: x')).toBe('Line 3: bad\nError: x')
+  expect(archStamp([{ name: 'b.c4', mtimeMs: 2 }, { name: 'a.c4', mtimeMs: 1 }])).toBe('a.c4:1|b.c4:2')
+})
+
+test('arch clicks: select, then drill into a view or a repo; breadcrumbs go back and a vanished view resets the trail', () => {
+  const ui = freshUi()
+  ui.archDirs = ['/w/vault/02-Architecture/system-maps']
+  const view = { id: 'index', title: 'Index', width: 1, height: 1, nodes: [], edges: [] }
+  const arch = { dir: ui.archDirs[0]!, model: { views: { index: view, api: { ...view, id: 'api' } }, first: 'index' } }
+  const node = { id: 'n', title: 'N', kind: 'system', isGroup: false, x: 0, y: 0, width: 1, height: 1 }
+  expect(archPress(ui, { ...node, navigateTo: 'api' }, arch)).toBe(false)
+  expect(ui.archSel).toBe('n')
+  ui.archPanX = 4
+  expect(archPress(ui, { ...node, navigateTo: 'api' }, arch)).toBe(false)
+  expect(ui.archTrail).toEqual(['index', 'api'])
+  expect([ui.archSel, ui.archPanX, ui.scroll.arch]).toEqual([undefined, 0, 0])
+  archBack(ui, 0)
+  expect(ui.archTrail).toEqual(['index'])
+  ui.archSel = 'r'
+  expect(archPress(ui, { ...node, id: 'r', repo: '../../../api' }, arch)).toBe(true)
+  expect(ui.archDirs.at(-1)).toBe('/w/api/docs')
+  expect(ui.archTrail).toEqual([])
+  archUp(ui, 0)
+  expect(ui.archDirs).toEqual(['/w/vault/02-Architecture/system-maps'])
+  ui.archTrail = ['index', 'gone']
+  archPrune(ui, arch)
+  expect(ui.archTrail).toEqual([])
+})
+
+test('layout reload keeps each cell\'s active tab; the o key goes to the visible panel used last', () => {
+  const prev = { split: 'row' as const, sizes: [0.5, 0.5], children: [{ tabs: ['files', 'exec'] as const, active: 1 }, { tabs: ['map'] as const }] }
+  const next = keepActive({ split: 'col', sizes: [0.5, 0.5], children: [{ tabs: ['map'] }, { tabs: ['files', 'exec'] }] }, prev as never)
+  expect((next as any).children[1].active).toBe(1)
+  const shown = { split: 'row', sizes: [0.5, 0.5], children: [{ tabs: ['files'] }, { tabs: ['log', 'arch'], active: 1 }] } as never
+  expect(oOwner(undefined, 'arch', shown)).toBe('arch')
+  expect(oOwner(undefined, 'project', shown)).toBe('files')
+  expect(oOwner('project', 'arch', shown)).toBe('project')
+})
+
+test('follow mode opens the edited file\'s folders and selects it, adding a new file; off or outside the root it does nothing', () => {
+  const ui = freshUi()
+  const project = { root: '/w', paths: ['a/b.ts'], truncated: false }
+  const f = followFile(ui, project, '/w/a/new.ts', false)!
+  expect(f.project.paths).toEqual(['a/b.ts', 'a/new.ts'])
+  expect(ui.treeOpen).toEqual({ a: true })
+  expect(ui.treeSel).toBe('a/new.ts')
+  expect([f.focus, f.last]).toEqual([true, true])
+  ui.zen = 'log'
+  expect(followFile(ui, project, '/w/a/b.ts', false)).toMatchObject({ focus: false, last: false })
+  expect(followFile(ui, project, '/elsewhere/x.ts', false)).toBeUndefined()
+  ui.follow = false
+  expect(followFile(ui, project, '/w/a/b.ts', false)).toBeUndefined()
+})
+
+test('tree folders, scrolling, the message box and ORCH cards change only the view state they own', () => {
+  const ui = freshUi()
+  toggleDir(ui, 'src', new Map([['src', 1]]))
+  expect(ui.treeShut).toEqual({ src: true })
+  toggleDir(ui, 'src', new Map([['src', 1]]))
+  expect([ui.treeOpen, ui.treeShut]).toEqual([{ src: true }, {}])
+  nudge(ui.scroll, 'log', 50, 10)
+  expect(ui.scroll.log).toBe(10)
+  nudge(ui.scroll, 'exec:detail', scrollSign('exec:detail') * 3, 10)
+  expect(ui.scroll['exec:detail']).toBe(0)
+  toggleMsg(ui, 'main', 'radar')
+  expect(ui.msgTo).toBe('main')
+  toggleMsg(ui, 'main', 'radar')
+  expect(ui.msgTo).toBeUndefined()
+  const s = emptySession()
+  s.files.set('/w/x.ts', { path: '/w/x.ts', op: 'M', count: 1, lastAt: 1, lastOp: 'M', by: ['a1'], diff: [] })
+  toggleAgent(ui, s, 'a1')
+  expect([ui.selAgent, ui.filesBy, ui.selFile]).toEqual(['a1', 'a1', '/w/x.ts'])
+  toggleAgent(ui, s, 'a1')
+  expect([ui.selAgent, ui.filesBy]).toEqual([undefined, undefined])
+})
+
+test('tool calls: Bash results end their Exec, file tools touch Files and ask for WEB or MEDIA, others go to the Log', () => {
+  const s = emptySession()
+  const x: Exec = { id: 't1', who: 'main', command: 'ls', startedAt: 1, status: 'running' }
+  expect(endExec(x, { stdout: 'ok' }, undefined, false, 5)).toBeUndefined()
+  expect([x.status, x.exit, x.stdout, x.endedAt]).toEqual(['ok', 0, 'ok', 5])
+  const bg: Exec = { ...x, id: 't2', status: 'running' }
+  expect(endExec(bg, { backgroundTaskId: 'b9' }, undefined, false, 5)).toBe('b9')
+  expect(bg.status).toBe('background')
+  const r = { failed: false, who: 'main', at: 9, line: 'Write /w/p.html', brief: 'Writing p.html' }
+  expect(recordTool(s, 'Write', {}, { type: 'create' }, { ...r, path: '/w/p.html' })).toEqual({ fresh: 'files', web: '/w/p.html', media: undefined })
+  expect(s.files.get('/w/p.html')!.op).toBe('A')
+  expect(recordTool(s, 'Edit', {}, {}, { ...r, path: '/w/a.png' }).media).toBe('/w/a.png')
+  expect(recordTool(s, 'Read', {}, {}, { ...r, path: '/tmp/scratchpad/.shots/x.png' })).toEqual({})
+  expect(recordTool(s, 'Grep', {}, {}, { ...r, failed: true, path: undefined })).toEqual({})
+  expect(s.log.at(-1)!.kind).toBe('error')
+  expect(applyChecklist(s, 'nope', 'main', 1)).toEqual({ error: 'todos must be an array' })
+  expect(applyChecklist(s, [{ content: 'a', status: 'completed' }, { content: 'b', status: 'pending' }], 'main', 1)).toEqual({ text: 'checklist 1/2' })
+  expect(summary('Bash', { command: 'ls -la\nmore' })).toBe('Bash ls -la')
+  expect(isDocsCreate({ tool: 'mcp__claude_ai_Claude_Docs__create' })).toBe(true)
+  expect(isDocsCreate({ tool: 'mcp__claude_ai_Claude_Docs__read' })).toBe(false)
+})
+
+test('a background task notification ends its command with the exit code and the output read so far', () => {
+  const s = emptySession()
+  s.execs.push({ id: 'e1', who: 'main', command: 'sleep', startedAt: 1, status: 'background', outputPath: '/t/tasks/b9.output' })
+  const note = '<task-notification><task-id>b9</task-id><status>failed</status>exit code 3</task-notification>'
+  expect(endTask(s, note, new Map([['e1', 'tail']]), 50)).toBe(true)
+  expect(s.execs[0]).toMatchObject({ status: 'error', exit: 3, endedAt: 50, stdout: 'tail' })
+  expect(endTask(s, note, new Map(), 60)).toBe(false)
+})
+
+test('session title, model name and MAP message reports', () => {
+  expect(parseTitle('"aiTitle":"Generated"\n"customTitle":"Mine"\n"aiTitle":"Later"\n')).toBe('Mine')
+  expect(parseTitle('"aiTitle":"Only"\n')).toBe('Only')
+  expect(parseTitle(undefined)).toBeUndefined()
+  expect(prettyModel('claude-opus-4-5')).toBe('opus-4.5')
+  const s = emptySession()
+  s.agents.set('b', { id: 'b', label: 'b', type: 'Plan', startedAt: 20, status: 'running' })
+  s.agents.set('a', { id: 'a', label: 'a', type: 'Plan', startedAt: 10, status: 'running' })
+  expect([agentTag(s, 'main'), agentTag(s, 'a'), agentTag(s, 'b')]).toEqual(['[M]', '[1]', '[2]'])
+  expect(sendReport(s, 'all', 'hi', ['a', 'b'], []).toast).toBe('Sent to 2 subagents')
+  expect(sendReport(s, 'b', 'hi', ['b'], ['[2] gone']).toast).toBe('Not delivered: [2] gone')
+  expect(sendReport(s, 'b', 'hi', ['b'], []).log).toBe('You → [2]: hi')
+})
+
+test('media helpers: new files found after a command, previews, /html arguments and Artifact links', () => {
+  expect(newMediaOf('/w/a.png\n/w/notes.md\n/w/scratchpad/.shots/s.png\n/w/b.gif\n/w/c.jpg\n/w/d.png')).toEqual(['/w/a.png', '/w/b.gif'])
+  expect(previewOf('{"width":2,"height":3,"frames":["/f/0.png"]}')).toEqual({ frame: '/f/0.png', width: 2, height: 3 })
+  expect(previewOf('not json')).toBeUndefined()
+  expect(prepArgv('/b', '/w/a b.png', true)).toEqual(['/b/media-prep', '/w/a b.png', '/tmp/asint-media/preview-_w_a_b_png'])
+  expect(openArgv('/b', '/w/x.ts')).toEqual(['setsid', '-f', 'xdg-terminal-exec', 'nvim', '/w/x.ts'])
+  expect(openArgv('/b', '/w/x.pdf')).toEqual(['setsid', '-f', '/b/asint-open', '/w/x.pdf'])
+  expect(htmlArgs('-b  ~/a.html')).toEqual({ brave: true, raw: '~/a.html' })
+  expect(htmlArgs('-t x')).toEqual({ brave: false, raw: 'x' })
+  expect(artifactUrl('Published: https://claude.ai/artifact/abc).', undefined)).toBe('https://claude.ai/artifact/abc')
+})
+
+test('a finished edit highlights the lines its new content fills', () => {
+  expect(editedLines({ tool: 'Edit', new: 'b\nc' }, 'a\nb\nc\nd')).toEqual({ from: 1, to: 2 })
+  expect(editedLines({ tool: 'Write', new: 'x\ny\nz' }, 'x\ny\nz')).toEqual({ from: 0, to: 2 })
+  expect(editedLines({ tool: 'Edit', new: 'missing' }, 'a')).toEqual({ from: 0, to: 0 })
+})

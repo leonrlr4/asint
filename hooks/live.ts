@@ -73,3 +73,9 @@ export function lineOf(text: string, needle: string) {
   const at = text.indexOf(needle)
   return at < 0 ? -1 : text.slice(0, at).split('\n').length - 1
 }
+
+/** The lines (0-based, inclusive) a finished edit's new content fills in the file as it is now: Write fills from the top. */
+export function editedLines(edit: Pick<LiveEdit, 'tool' | 'new'>, text: string): { from: number; to: number } {
+  const from = edit.tool === 'Write' ? 0 : Math.max(0, lineOf(text, edit.new))
+  return { from, to: from + edit.new.split('\n').length - 1 }
+}
