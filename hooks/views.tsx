@@ -485,7 +485,7 @@ const execRow = (c: ViewCtx, x: Exec, i: number) => {
 }
 
 export function execTab(c: ViewCtx, maxRows: number) {
-  const { el, s, p, ui } = c
+  const { el, s, p, ui, now } = c
   const { Box, Text, Code } = el
   const list = [...s.execs].reverse()
   if (!list.length) return <Text color={p.muted}>{t('還沒有跑過指令。', 'No commands run yet.')}</Text>
@@ -507,7 +507,12 @@ export function execTab(c: ViewCtx, maxRows: number) {
           const visible = Math.max(3, (wide ? maxRows : maxRows - listRows - 1) - 5)
           const back = scrollAt(c, 'exec:detail', all.length - visible)
           const end = all.length - back
-          return <Text color={p.hi} wrap="truncate-end">{all.slice(Math.max(0, end - visible), end).join('\n') || t('（沒有輸出）', '(no output)')}</Text>
+          // A command in the foreground gives its output only when it ends (the engine streams no tool output), so say so
+          // instead of showing "no output" for something that has not finished.
+          const empty = sel.status === 'running'
+            ? t(`執行中 ${fmtDur(now - sel.startedAt)}，輸出會在指令結束後出現。`, `Running for ${fmtDur(now - sel.startedAt)}; the output appears when the command ends.`)
+            : t('（沒有輸出）', '(no output)')
+          return <Text color={sel.status === 'running' && !(out ?? '') ? p.accent : p.hi} wrap="truncate-end">{all.slice(Math.max(0, end - visible), end).join('\n') || empty}</Text>
         })()}
       </Box>
     )
