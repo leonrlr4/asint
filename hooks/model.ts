@@ -229,3 +229,68 @@ export const fmtClock = (at: number) => {
   const d = new Date(at)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
 }
+
+// ── Saving and restoring a session ────────────────────────────────────────
+// The dashboard's data lives in memory; a resumed session (same session id) would start empty. These turn it into plain JSON
+// and back. Commands and agents that were running when the file was written cannot still be running after a restart, so they come back as interrupted.
+
+/** Longest saved output per command, and the most the whole file may hold before the oldest log lines and outputs go. */
+export const SAVED_OUTPUT = 20_000
+export const SAVED_MAX = 2_000_000
+
+export type SavedSession = {
+  v: 1
+  files: FileEntry[]
+  execs: Exec[]
+  agents: Agent[]
+  todos: Todo[]
+  log: LogEntry[]
+  media: Media[]
+  vitals: Vitals
+  lastEventAt: number
+}
+
+export function saveSession(s: Session): SavedSession {
+  const saved: SavedSession = {
+    v: 1,
+    files: [...s.files.values()],
+    execs: s.execs.map(x => ({ ...x, stdout: x.stdout?.slice(-SAVED_OUTPUT), stderr: x.stderr?.slice(-SAVED_OUTPUT) })),
+    agents: [...s.agents.values()],
+    todos: s.todos,
+    log: s.log,
+    media: s.media,
+    vitals: s.vitals,
+    lastEventAt: s.lastEventAt,
+  }
+  // Too big: the oldest output, then the oldest log lines, go first.
+  for (let drop = 0; JSON.stringify(saved).length > SAVED_MAX && drop < 50; drop++) {
+    saved.log = saved.log.slice(Math.ceil(saved.log.length / 4))
+    saved.execs = saved.execs.map((x, i) => (i < saved.execs.length / 2 ? { ...x, stdout: undefined, stderr: undefined } : x))
+    saved.files = saved.files.map(f => ({ ...f, diff: f.diff.slice(-200) }))
+  }
+  return saved
+}
+
+const isList = (x: unknown): x is unknown[] => Array.isArray(x)
+
+/** Returns undefined when the text is not a saved session (damaged, other version); the caller then starts empty. */
+export function reviveSession(text: string | undefined): Session | undefined {
+  if (!text) return undefined
+  try {
+    const raw = JSON.parse(text) as Partial<SavedSession>
+    if (raw?.v !== 1 || !isList(raw.files) || !isList(raw.execs) || !isList(raw.agents) || !isList(raw.todos) || !isList(raw.log) || !isList(raw.media)) return undefined
+    const at = Number(raw.lastEventAt) || 0
+    const s = emptySession()
+    for (const f of raw.files) s.files.set(f.path, f)
+    s.execs = raw.execs.map(x => (x.status === 'running' || x.status === 'background' ? { ...x, status: 'error' as const, endedAt: x.endedAt ?? at } : x))
+    for (const a of raw.agents) s.agents.set(a.id, a.status === 'running' ? { ...a, status: 'error', endedAt: a.endedAt ?? at, doing: undefined } : a)
+    s.todos = raw.todos
+    s.log = raw.log
+    s.media = raw.media
+    s.vitals = { ...(raw.vitals ?? {}), turnRunning: false }
+    s.lastEventAt = at
+    return s
+  } catch {
+    return undefined
+  }
+}

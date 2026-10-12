@@ -16,6 +16,8 @@ export type ShimmerProps = {
   /** Shown after the timer on the right; empty string hides it. */
   suffix?: string
   width: number
+  /** What a click on the row reports to the hooks as `{ pick }` (a Client, unlike a Button, cannot hold the row's text, so it takes the click itself). */
+  pick?: string
   /** UI language from the hooks side (client modules cannot import ./i18n). Every fixed string here is ASCII and the same in both languages. */
   lang?: 'en' | 'zh'
 }
@@ -33,6 +35,9 @@ const Shimmer: ClientModule<ShimmerProps, State> = (props, surface) => {
     surface.setState({ ticks: 0 })
     surface.every(TICK_MS, () => surface.setState({ ticks: (surface.state?.ticks ?? 0) + 1 }))
   }
+  surface.onPointer(e => {
+    if (e.type === 'down' && e.button === 'left' && props.pick) surface.post({ pick: props.pick })
+  })
   const ticks = surface.state?.ticks ?? 0
   // Animation and text style are shared by every skin (user decision, 2026-10-06); the skin only picks colors.
   const glyph = BARS[ticks % BARS.length]

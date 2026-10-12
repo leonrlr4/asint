@@ -35,6 +35,9 @@ export type UiState = {
   fullFile: boolean
   showReads: boolean
   selExec?: string
+  /** The TODO item whose steps are shown, and the step (an Exec id) opened inline under it. */
+  selTodo?: string
+  selStep?: string
   mediaFilter: 'ALL' | MediaKind
   selMedia?: string
   /** Scroll position per card (or per detail area `<panel>:detail`). The wheel scrolls the card, not the whole pane. */
@@ -52,6 +55,10 @@ export type UiState = {
   archDirs: string[]
   archSel?: string
   archPanX: number
+  /** Columns the file previews are shifted left, by scroll key ('files:detail', 'project:detail'). */
+  hx: Record<string, number>
+  /** Where the user dragged each card's list/preview divider: the left side's share of the card, by panel. */
+  splitRatio: Record<string, number>
 }
 
 export type Actions = {
@@ -72,8 +79,16 @@ export type Actions = {
   /** Go back to directory level i (e.g. from a repo to the system level). */
   archUp: (i: number) => void
   archPan: (dx: number) => void
+  /** Shifts a code preview sideways; max is the furthest useful shift, so repeated presses cannot pile up past the end. */
+  hpan: (key: string, dx: number, max: number) => void
+  /** Scrolls a code preview up or down by dy lines (negative is up), clamped to the content. */
+  vpan: (key: string, dy: number) => void
   archOpen: () => void
   mapView: (v: UiState['mapView']) => void
+  selTodo: (key: string) => void
+  selStep: (id: string) => void
+  /** Jump to the EXEC card with this command selected. */
+  gotoExec: (id: string) => void
   /** MAP: open/close the popup for messaging an agent, and send the message. */
   /** at: which marker was clicked (radar or graph key); the popup opens next to it. */
   openMsg: (to: string, at?: string) => void
@@ -145,6 +160,26 @@ export type ArchState = {
 }
 
 /** Read a scroll area's position clamped to 0..max, and record max. */
+/** Sideways scrolling for code previews: lines shift left by x columns; a diff keeps its +/- marker column. */
+export const hshift = (lines: string[], x: number, diff: boolean) =>
+  x <= 0 ? lines : lines.map(l => (diff ? l.slice(0, 1) + l.slice(1 + x) : l.slice(x)))
+/** The furthest shift worth offering: until the longest line's end is about half a window in. 0 when every line fits. */
+export const hmax = (lines: string[], width: number) => {
+  const longest = lines.reduce((n, l) => Math.max(n, l.length), 0)
+  return longest > width - 6 ? longest - Math.floor(width / 2) : 0
+}
+const hbar = (c: ViewCtx, key: string, x: number, max: number, width: number, owner: Panel) => {
+  const { el, p, act } = c
+  const { Text, Button } = el
+  const mine = c.oOwner === owner
+  const side = Math.max(8, Math.floor(width / 2))
+  return [
+    max > 0 ? <Button key={`${key}-left`} hotkey={mine ? 'b' : undefined} plain dimColor label="◂" onPress={() => act.hpan(key, -side, max)} /> : null,
+    max > 0 ? <Button key={`${key}-right`} hotkey={mine ? 'w' : undefined} plain dimColor label="▸" onPress={() => act.hpan(key, side, max)} /> : null,
+    x > 0 ? <Text key={`${key}-x`} color={p.muted}>{t(`第 ${x + 1} 欄起`, `col ${x + 1}`)}</Text> : null,
+  ]
+}
+
 const scrollAt = (c: ViewCtx, key: string, max: number) => {
   const m = Math.max(0, max)
   c.scrollMax.set(key, m)
@@ -260,20 +295,33 @@ export function header(c: ViewCtx) {
 export const WIDE = 90
 export const isWide = (c: ViewCtx) => c.width >= WIDE
 
-/** Horizontal split: left gets ratio, one column for the divider; returns both widths. */
+/** The draggable divider takes this many columns (a line with a space on each side, so it is easy to grab). */
+export const DIVIDER = 3
+/** Narrowest either side of a dragged divider may get. */
+const SIDE_MIN = 16
+
+/** Horizontal split: left gets ratio; returns both widths. The divider's width is taken off first. */
 export const splitWidths = (width: number, ratio: number) => {
-  const left = Math.max(30, Math.floor((width - 1) * ratio))
-  return { left, right: Math.max(20, width - 1 - left) }
+  const room = width - DIVIDER
+  const left = Math.min(Math.max(SIDE_MIN, room - SIDE_MIN), Math.max(SIDE_MIN, Math.floor(room * ratio)))
+  return { left, right: Math.max(SIDE_MIN, room - left) }
 }
 
-function split(c: ViewCtx, ratio: number, left: (w: number) => unknown, right: (w: number) => unknown) {
+/** The ratio for a divider dragged so the left side ends at column left of a card body total columns wide. */
+export const ratioFromDrag = (left: number, total: number) => {
+  const room = Math.max(1, total - DIVIDER)
+  return Math.min(1 - SIDE_MIN / room, Math.max(SIDE_MIN / room, left / room))
+}
+
+function split(c: ViewCtx, panel: string, dflt: number, left: (w: number) => unknown, right: (w: number) => unknown) {
   const { Box } = c.el
-  const w = splitWidths(c.width, ratio)
+  const w = splitWidths(c.width, c.ui.splitRatio[panel] ?? dflt)
   return (
     <Box flexDirection="row">
       <Box width={w.left} flexDirection="column" flexShrink={0}>{left(w.left) as never}</Box>
-      <Box width={1} flexShrink={0} flexDirection="column"><c.el.Text color={c.p.faint}>{'│\n'.repeat(Math.max(1, c.rows - 6)).trimEnd()}</c.el.Text></Box>
-      <Box width={w.right} flexDirection="column" flexShrink={0} paddingLeft={1}>{right(w.right - 1) as never}</Box>
+      <c.el.Client key={`divider-${panel}`} module="./divider.tsx" height={Math.max(1, c.rows - 6)}
+        props={{ panel, palette: c.p, rows: Math.max(1, c.rows - 6), left: w.left, total: c.width }} />
+      <Box width={w.right} flexDirection="column" flexShrink={0}>{right(w.right) as never}</Box>
     </Box>
   )
 }
@@ -311,12 +359,16 @@ export function filesTab(c: ViewCtx, maxRows: number) {
     const lines = (text ?? '').split('\n')
     const visible = Math.max(3, (wide ? maxRows : maxRows - listRows - 1) - 3)
     const start = scrollAt(c, 'files:detail', lines.length - visible)
+    const shownLines = lines.slice(start, start + visible)
+    const hxMax = hmax(shownLines, width)
+    const hx = Math.min(hxMax, Math.max(0, ui.hx['files:detail'] ?? 0))
     return (
       <Box flexDirection="column" width={width}>
         <Box flexDirection="row" columnGap={1}>
           <Text color={p.accent} bold>{short(sel.path)}</Text>
           <Text color={p.muted}>{showDiff ? t('DIFF（本 session）', 'DIFF (this session)') : t('完整內容', 'Full file')}{pos(start, visible, lines.length)}</Text>
           {sel.diff.length ? <Button key="full" hotkey="d" plain dimColor label={ui.fullFile ? t('看 diff', 'Show diff') : t('看完整檔', 'Show full file')} onPress={act.toggleFull} /> : null}
+          {hbar(c, 'files:detail', hx, hxMax, width, 'files')}
           <Button key="open" hotkey={c.oOwner === 'files' ? 'o' : undefined} plain dimColor label={t('外開', 'Open')} onPress={() => act.openExternal(sel.path)} />
         </Box>
         <Text color={p.faint} wrap="truncate-start">{sel.path}</Text>
@@ -327,7 +379,7 @@ export function filesTab(c: ViewCtx, maxRows: number) {
             : <Text color={p.muted}>{t('轉換預覽中…', 'Converting preview…')}</Text>
           : text === undefined
           ? <Text color={p.muted}>{t('讀取中…', 'Loading…')}</Text>
-          : <Code source={lines.slice(start, start + visible).join('\n')} format={showDiff ? 'diff' : 'source'} path={sel.path} startLine={start + 1} wrap="truncate-end" />}
+          : <Code source={hshift(shownLines, hx, showDiff).join('\n')} format={showDiff ? 'diff' : 'source'} path={sel.path} startLine={start + 1} wrap="truncate-end" />}
       </Box>
     )
   }
@@ -345,7 +397,7 @@ export function filesTab(c: ViewCtx, maxRows: number) {
       </Box>
     )
   }
-  if (wide) return split(c, 0.38, w => listView(w, maxRows - 2), w => preview(w))
+  if (wide) return split(c, 'files', 0.38, w => listView(w, maxRows - 2), w => preview(w))
   return (
     <Box flexDirection="column">
       {listView(c.width, listRows)}
@@ -368,7 +420,7 @@ const execRow = (c: ViewCtx, x: Exec, i: number) => {
         <Box flexDirection="row" backgroundColor={mix(p.bg, p.accent, 0.12)}>
           <Button key={`xsel-${i}`} plain label={sel ? '▸' : ' '} onPress={() => act.selExec(x.id)} />
           <el.Client key={`run-${x.id}`} module="./shimmer.tsx"
-            props={{ text: `$ ${x.command.split('\n')[0]}`, palette: p, skin, elapsedMs: now - x.startedAt, suffix: `${x.status === 'background' ? 'BG ' : ''}${who}`, width: width - 2, lang: getLang() }} />
+            props={{ text: `$ ${x.command.split('\n')[0]}`, pick: `exec:${x.id}`, palette: p, skin, elapsedMs: now - x.startedAt, suffix: `${x.status === 'background' ? 'BG ' : ''}${who}`, width: width - 2, lang: getLang() }} />
         </Box>
         {x.status === 'background' && c.bgOutput.get(x.id)
           ? <Text color={p.muted} wrap="truncate-end">   └ {tail(c.bgOutput.get(x.id), 1)[0] ?? ''}</Text>
@@ -424,7 +476,7 @@ export function execTab(c: ViewCtx, maxRows: number) {
     const start = scrollAt(c, 'exec', list.length - n)
     return <Box flexDirection="column">{list.slice(start, start + n).map((x, i) => execRow(cc, x, i))}</Box>
   }
-  if (wide) return split(c, 0.5, w => rows(w, maxRows), w => detail(w))
+  if (wide) return split(c, 'exec', 0.5, w => rows(w, maxRows), w => detail(w))
   return (
     <Box flexDirection="column">
       {rows(c.width, listRows)}
@@ -520,12 +572,21 @@ function boardView(c: ViewCtx) {
   const filesOf = (id: string) => [...s.files.values()].filter(f => f.by.includes(id)).length
   const age = (x: (typeof subs)[number]) => fmtDur((x.a.endedAt ?? now) - x.a.startedAt)
   const msgBtn = (id: string) => <Button key={`bm-${id}`} plain dimColor={ui.msgTo !== id} label="✉" onPress={() => act.openMsg(id)} />
+  // MAIN has no card in the columns below, so while it works the header itself must move: a turning glyph, the turn's timer
+  // and the latest thing it did, otherwise the board looks frozen whenever only the main agent is busy.
+  const working = s.vitals.turnRunning
+  const lastDid = [...s.log].reverse().find(e => e.who === 'main' && e.kind !== 'agent')
+  const spin = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][Math.floor(now / 100) % 10]
   const main = (
-    <Box flexDirection="row" columnGap={1}>
-      <Text color={p.accent} bold>[M] MAIN</Text>
-      <Text color={s.vitals.turnRunning ? p.success : p.muted}>{s.vitals.turnRunning ? t('執行中', 'Running') : t('閒置', 'Idle')}</Text>
-      <Box flexGrow={1} flexShrink={1}><Text color={p.faint} wrap="truncate-end">{s.vitals.model ?? ''}</Text></Box>
-      {msgBtn('main')}
+    <Box flexDirection="column">
+      <Box flexDirection="row" columnGap={1}>
+        <Text color={p.accent} bold>[M] MAIN</Text>
+        <Text color={working ? p.success : p.muted}>{working ? `${spin} ${t('執行中', 'Running')}` : t('閒置', 'Idle')}</Text>
+        {working && s.vitals.turnStartedAt ? <Text color={p.muted}>{fmtDur(now - s.vitals.turnStartedAt)}</Text> : null}
+        <Box flexGrow={1} flexShrink={1}><Text color={p.faint} wrap="truncate-end">{s.vitals.model ?? ''}</Text></Box>
+        {msgBtn('main')}
+      </Box>
+      {working && lastDid ? <Text color={p.faint} wrap="truncate-end">⏵ {lastDid.text}</Text> : null}
     </Box>
   )
   const stateColor = (st: string) => (st === 'running' ? p.success : st === 'error' ? p.error : p.muted)
@@ -586,24 +647,116 @@ function boardView(c: ViewCtx) {
 // ── Todo ──────────────────────────────────────────────────
 
 export function todoTab(c: ViewCtx, maxRows: number) {
-  const { el, s, p, skin, now, width } = c
-  const { Box, Text} = el
+  const { el, s, p, skin, now, width, ui, act } = c
+  const { Box, Text, Button } = el
   if (!s.todos.length) return <Text color={p.muted}>{t('這個 session 目前沒有 checklist；agent 開清單時會出現在這裡。', 'No checklist in this session. It appears here when the agent starts one.')}</Text>
+  const wide = isWide(c)
+  const sel = s.todos.find(x => x.key === ui.selTodo) ?? s.todos.find(x => x.status === 'in_progress') ?? s.todos.at(-1)!
+  const listRows = wide ? maxRows : Math.max(3, Math.min(s.todos.length, Math.floor(maxRows * 0.4)))
+  const list = (w: number) => {
+    const start = scrollAt(c, 'todo', s.todos.length - listRows)
+    return (
+      <Box flexDirection="column" width={w}>
+        {s.todos.slice(start, start + listRows).map((td, i) => {
+          const on = td.key === sel.key
+          if (td.status === 'in_progress')
+            return <el.Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: td.content, pick: `todo:${td.key}`, palette: p, skin, elapsedMs: td.startedAt ? now - td.startedAt : 0, width: w, lang: getLang() }} />
+          const done = td.status === 'completed'
+          const fresh = done && td.doneAt && now - td.doneAt < 3000
+          return (
+            <Box key={`todo-${i}`} flexDirection="row" backgroundColor={on ? p.surface : undefined}>
+              <Text color={done ? p.success : p.faint}>{on ? '▸' : ' '}{done ? '✓ ' : '○ '}</Text>
+              <Box flexGrow={1} flexShrink={1}><Button key={`tsel-${i}`} plain label={clip(td.content, Math.max(8, w - 24))} onPress={() => act.selTodo(td.key)} /></Box>
+              {done && td.doneAt ? <Text color={p.faint}> {td.startedAt ? fmtDur(td.doneAt - td.startedAt) : ''} {fmtClock(td.doneAt)}</Text> : null}
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  }
+  if (wide) return split(c, 'todo', 0.4, w => list(w), w => todoDetail(c, sel, w, maxRows))
   return (
     <Box flexDirection="column">
-      {s.todos.slice(scrollAt(c, 'todo', s.todos.length - maxRows), scrollAt(c, 'todo', s.todos.length - maxRows) + maxRows).map((t, i) => {
-        if (t.status === 'in_progress')
-          return <el.Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: t.content, palette: p, skin, elapsedMs: t.startedAt ? now - t.startedAt : 0, width, lang: getLang() }} />
-        const done = t.status === 'completed'
-        const fresh = done && t.doneAt && now - t.doneAt < 3000
-        return (
-          <Box key={`todo-${i}`} flexDirection="row">
-            <Text color={done ? p.success : p.faint}>{done ? '✓ ' : '○ '}</Text>
-            <Box flexGrow={1}><Text color={fresh ? p.hi : done ? p.muted : p.base} bold={!!fresh}>{t.content}</Text></Box>
-            {done && t.doneAt ? <Text color={p.faint}> {t.startedAt ? fmtDur(t.doneAt - t.startedAt) : ''} {whoLabel(s, t.by ?? 'main')} {fmtClock(t.doneAt)}</Text> : null}
+      {list(width)}
+      {rule(c)}
+      {todoDetail(c, sel, width, Math.max(4, maxRows - listRows - 1))}
+    </Box>
+  )
+}
+
+/** What happened while an item was in progress: the commands and other tool calls of whoever worked on it, oldest first. */
+export function todoSteps(s: Session, td: Session['todos'][number], now: number) {
+  if (!td.startedAt) return []
+  const end = td.doneAt ?? now
+  const who = td.by ?? 'main'
+  type Step = { at: number; exec?: Exec; text: string; op?: string; failed?: boolean }
+  const execs = s.execs.filter(x => x.who === who && x.startedAt >= td.startedAt! && x.startedAt <= end)
+  const steps: Step[] = [
+    ...execs.map(x => ({ at: x.startedAt, exec: x, text: x.description || x.command.split('\n')[0]!, op: 'B', failed: x.status === 'error' })),
+    // A Bash call is also logged as a tool line; the command above already stands for it.
+    ...s.log.filter(e => e.who === who && e.at >= td.startedAt! && e.at <= end && (e.kind === 'tool' || e.kind === 'error' || e.kind === 'agent')
+      && !(e.op === 'B' && execs.some(x => Math.abs(x.startedAt - e.at) <= 2000)))
+      .map(e => ({ at: e.at, text: e.text, op: e.op, failed: e.kind === 'error' })),
+  ]
+  return steps.sort((a, b) => a.at - b.at)
+}
+
+function todoDetail(c: ViewCtx, td: Session['todos'][number], width: number, rows: number) {
+  const { el, s, p, ui, act, now } = c
+  const { Box, Text, Button, Code } = el
+  const steps = todoSteps(s, td, now)
+  const done = td.status === 'completed'
+  const state = done ? t('完成', 'Done') : td.status === 'in_progress' ? t('進行中', 'In progress') : t('還沒開始', 'Pending')
+  const stateColor = done ? p.success : td.status === 'in_progress' ? p.accent : p.muted
+  const open = steps.find(x => x.exec && x.exec.id === ui.selStep)?.exec
+  // The opened command takes the lower part; the step list gets what is left, at least three rows.
+  const lower = open ? Math.min(10, Math.max(5, Math.floor(rows * 0.45))) : 0
+  const visible = Math.max(3, rows - 6 - lower)
+  const start = scrollAt(c, 'todo:detail', steps.length - visible)
+  const glyph = (op?: string) => (op === 'B' ? '$' : op === 'E' ? '✎' : op === 'W' ? '+' : op === 'R' ? '·' : '›')
+  const sep = <Text color={p.faint}>{'─'.repeat(Math.max(4, width - 1))}</Text>
+  return (
+    <Box flexDirection="column" width={width}>
+      <Text color={p.hi} bold wrap="truncate-end">{td.content}</Text>
+      <Box flexDirection="row" columnGap={1}>
+        <Text color={stateColor} bold>{state}</Text>
+        <Text color={p.muted} wrap="truncate-end">
+          {td.startedAt ? `${fmtClock(td.startedAt)} · ${fmtDur((td.doneAt ?? now) - td.startedAt)} · ` : ''}{whoLabel(s, td.by ?? 'main')}
+        </Text>
+      </Box>
+      {sep}
+      {!td.startedAt ? <Text color={p.faint}>{t('還沒開始，沒有步驟。', 'Not started yet, no steps.')}</Text>
+        : !steps.length ? <Text color={p.faint}>{t('這段時間沒有紀錄到工具呼叫。', 'No tool calls were recorded in this time.')}</Text>
+        : (
+          <Box flexDirection="column">
+            <Text color={p.faint}>{t('步驟', 'Steps')} {steps.length}{steps.length > visible ? pos(start, visible, steps.length) : ''}</Text>
+            {steps.slice(start, start + visible).map((x, i) => (
+              <Box key={`step-${i}`} flexDirection="row" columnGap={1}>
+                <Box width={6} flexShrink={0}><Text color={p.faint} wrap="truncate-end">{`+${fmtDur(x.at - td.startedAt!)}`}</Text></Box>
+                <Box width={1} flexShrink={0}><Text color={x.failed ? p.error : p.accent} bold>{glyph(x.op)}</Text></Box>
+                <Box flexGrow={1} flexShrink={1}>
+                  {x.exec
+                    ? <Button key={`stp-${i}`} plain dimColor={ui.selStep !== x.exec.id} label={clip(x.text, Math.max(8, width - 12))} onPress={() => act.selStep(x.exec!.id)} />
+                    : <Text color={x.failed ? p.error : p.base} wrap="truncate-end">{x.text}</Text>}
+                </Box>
+                {x.exec ? <Text color={x.failed ? p.error : p.success}>{x.exec.status === 'running' ? '…' : x.failed ? '✗' : '✓'}</Text> : null}
+              </Box>
+            ))}
           </Box>
-        )
-      })}
+        )}
+      {open ? (
+        <Box flexDirection="column">
+          {sep}
+          <Box flexDirection="row" columnGap={2}>
+            <Text color={open.status === 'error' ? p.error : p.success} bold>exit {open.exit ?? '-'}</Text>
+            <Text color={p.muted}>{open.endedAt ? fmtDur(open.endedAt - open.startedAt) : '…'}</Text>
+            <Box flexGrow={1} />
+            <Button key="goto-exec" plain dimColor label={t('到 EXEC ›', 'Open in EXEC ›')} onPress={() => act.gotoExec(open.id)} />
+          </Box>
+          <Code source={open.command} language="bash" wrap="truncate-end" />
+          {tail(open.stderr || open.stdout || (c.bgOutput.get(open.id) ?? ''), Math.max(1, lower - 3)).map((l, i) => <Text key={`so-${i}`} color={p.muted} wrap="truncate-end">{l}</Text>)}
+        </Box>
+      ) : null}
     </Box>
   )
 }
@@ -686,11 +839,15 @@ export function projectTab(c: ViewCtx, maxRows: number) {
     const lines = (c.treeText ?? '').split('\n')
     const visible = Math.max(3, height - 2)
     const start = scrollAt(c, 'project:detail', lines.length - visible)
+    const shownLines = lines.slice(start, start + visible)
+    const hxMax = hmax(shownLines, width)
+    const hx = Math.min(hxMax, Math.max(0, ui.hx['project:detail'] ?? 0))
     return (
       <Box flexDirection="column" width={width}>
         <Box flexDirection="row" columnGap={1}>
           <Text color={p.accent} bold>{rel}</Text>
           {isMediaPath(rel) ? null : <Text color={p.muted}>{pos(start, visible, lines.length)}</Text>}
+          {isMediaPath(rel) ? null : hbar(c, 'project:detail', hx, hxMax, width, 'project')}
           <Button key="tree-open" hotkey={c.oOwner === 'project' ? 'o' : undefined} plain dimColor label={t('外開', 'Open')} onPress={() => act.openExternal(abs)} />
         </Box>
         {c.live?.path === abs
@@ -704,11 +861,11 @@ export function projectTab(c: ViewCtx, maxRows: number) {
             : <Text color={p.muted}>{t('轉換預覽中…', 'Converting preview…')}</Text>
           : c.treeText === undefined
           ? <Text color={p.muted}>{t('讀取中…', 'Loading…')}</Text>
-          : <Code source={lines.slice(start, start + visible).join('\n')} format="source" path={abs} startLine={start + 1} wrap="truncate-end" />}
+          : <Code source={hshift(shownLines, hx, false).join('\n')} format="source" path={abs} startLine={start + 1} wrap="truncate-end" />}
       </Box>
     )
   }
-  if (wide) return split(c, 0.38, w => tree(w), w => preview(w, maxRows))
+  if (wide) return split(c, 'project', 0.38, w => tree(w), w => preview(w, maxRows))
   return (
     <Box flexDirection="column">
       {tree(c.width)}
@@ -839,8 +996,8 @@ export function archTab(c: ViewCtx, rows: number) {
           </Box>
         ))}
         <Box flexGrow={1} />
-        {size.cols > winCols ? <Button key="arch-left" hotkey="b" plain dimColor label="◀" onPress={() => act.archPan(-Math.max(8, Math.floor(winCols / 2)))} /> : null}
-        {size.cols > winCols ? <Button key="arch-right" hotkey="w" plain dimColor label="▶" onPress={() => act.archPan(Math.max(8, Math.floor(winCols / 2)))} /> : null}
+        {size.cols > winCols ? <Button key="arch-left" hotkey="b" plain dimColor label="◂" onPress={() => act.archPan(-Math.max(8, Math.floor(winCols / 2)))} /> : null}
+        {size.cols > winCols ? <Button key="arch-right" hotkey="w" plain dimColor label="▸" onPress={() => act.archPan(Math.max(8, Math.floor(winCols / 2)))} /> : null}
         {arch.at ? <Text color={p.faint}>{fmtClock(arch.at)}</Text> : null}
         <Button key="arch-open" hotkey={c.oOwner === 'arch' ? 'o' : undefined} plain dimColor label={t('完整檢視', 'Full view')} onPress={act.archOpen} />
       </Box>
@@ -934,7 +1091,7 @@ export function mediaTab(c: ViewCtx, maxRows: number) {
           {sel.url ? <Text color={p.faint} wrap="truncate-end">{sel.url}</Text> : null}
         </Box>
       ) : null
-  if (wide) return split(c, 0.32, () => listView(maxRows - 2), w => view(w, Math.max(6, maxRows - 1)))
+  if (wide) return split(c, 'media', 0.32, () => listView(maxRows - 2), w => view(w, Math.max(6, maxRows - 1)))
   const shown = Math.min(list.length, 6)
   return (
     <Box flexDirection="column">
@@ -1037,6 +1194,9 @@ function cellCard(c: ViewCtx, cell: Cell, k: number) {
       {panelBody({ ...c, width: innerW, rows: rect.h - 2 }, 'status', rect.h - 2)}
     </Box>
   )
+  // j and k scroll the card's main region: the detail side when it overflows, else the list. The sizes come from the previous draw.
+  const more = (key: string) => (c.scrollMax.get(key) ?? 0) > 0
+  const scrollKey = more(`${active}:detail`) ? `${active}:detail` : more(active) ? active : undefined
   return (
     <Box key={`cell-${k}`} position="absolute" left={rect.x} top={rect.y} width={rect.w} height={rect.h}
       flexDirection="column" {...frame} paddingX={1} overflow="hidden">
@@ -1047,10 +1207,12 @@ function cellCard(c: ViewCtx, cell: Cell, k: number) {
             onPress={() => act.focusPanel(t)} />
         ))}
         <Box flexGrow={1} />
-        <Text color={p.muted}>{panelCount(s, active)}</Text>
+        <Box flexShrink={1}><Text color={p.muted} wrap="truncate-end">{panelCount(s, active)}</Text></Box>
+        {scrollKey ? <Button key={`up-${active}`} hotkey={c.oOwner === active ? 'k' : undefined} plain dimColor label="▴" onPress={() => act.vpan(scrollKey, -5)} /> : null}
+        {scrollKey ? <Button key={`down-${active}`} hotkey={c.oOwner === active ? 'j' : undefined} plain dimColor label="▾" onPress={() => act.vpan(scrollKey, 5)} /> : null}
         {c.ui.zen
-          ? <Button key="unzen" hotkey="z" plain label={t(' ⛶ 還原', ' ⛶ Restore')} onPress={() => act.zen()} />
-          : <Button key={`zen-${active}`} plain dimColor label=" ⛶" onPress={() => act.zen(active)} />}
+          ? <Button key="unzen" hotkey="z" plain label={t(' ⤢ 還原', ' ⤢ Restore')} onPress={() => act.zen()} />
+          : <Button key={`zen-${active}`} plain dimColor label=" ⤢" onPress={() => act.zen(active)} />}
       </Box>
       <Box flexDirection="column" height={innerH} overflow="hidden">
         {panelBody({ ...c, width: innerW, rows: innerH }, active, innerH)}

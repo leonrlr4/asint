@@ -6,7 +6,7 @@ import type { Palette, Skin } from '../types'
 import { Canvas } from './canvas'
 import { draw } from './map'
 import {
-  applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind,
+  applyTaskCreate, applyTaskUpdate, applyTodoWrite, emptySession, exitCodeOf, isMedia, log, mediaKind, reviveSession, saveSession,
   patchLines, registerMedia, short, startExec, touchFile, upsertAgent, type Session, type TodoStatus,
 } from './model'
 import { chatPaletteFor, FALLBACK, formatDuration, paletteFor, sourcesFor } from './palette'
@@ -16,7 +16,7 @@ import { pngSize } from './image'
 import { getLang, langFromLocale, setLang, t } from './i18n'
 import { LIVE_TOOLS, lineOf, type LiveEdit, readLive } from './live'
 import { cells, headWidth, imageTags, type Location, locationRow, type Picture, TILE_CHROME_ROWS, tiles } from './prompt'
-import { type ArchState, dashboard, treeRows, PANEL_KEY, PANEL_LABEL, panelArea, splitWidths, vitalsCompact, vitalsCompactText, WIDE, type Actions, type UiState, type ViewCtx } from './views'
+import { type ArchState, dashboard, treeRows, PANEL_KEY, PANEL_LABEL, panelArea, ratioFromDrag, DIVIDER, splitWidths, vitalsCompact, vitalsCompactText, WIDE, type Actions, type UiState, type ViewCtx } from './views'
 
 // asint: a personal Claude Code interface. Every hook that uses $ lives in this file ($ cannot be passed
 // into other module files); views are in views.tsx, the Map in map.ts and data in model.ts, all pure functions that never touch $.
@@ -81,7 +81,7 @@ const ACTIVE_MS = 3000
 let S: Session = emptySession()
 const ui: UiState = {
   tab: 'files', mapView: 'combo', comboSlot: 0, fullFile: false, showReads: true, mediaFilter: 'ALL', scroll: {},
-  archTrail: [], archDirs: [], archPanX: 0, treeOpen: {}, follow: true,
+  archTrail: [], archDirs: [], archPanX: 0, hx: {}, splitRatio: {}, treeOpen: {}, follow: true,
 }
 const scrollMax = new Map<string, number>()
 // Last rendered pane size; wheel events use it to find the card under the pointer. Keyboard scrolling scrolls the card clicked last.
@@ -179,6 +179,61 @@ async function saveLayout($: EngineInterface, next: LayoutNode) {
   await $.fs.write(`${await $.env.get('HOME')}/${LAYOUT_FILE}`, layoutText).catch(() => undefined)
 }
 
+// ── Saving the session ───────────────────────────────────────────────────
+// What the dashboard shows is kept in memory; a resumed session has the same id, so it is written to
+// ~/.cache/asint/sessions/<session id>.json (data and the view the user left it in) and read back at session start.
+const SESSIONS_DIR = '.cache/asint/sessions'
+const SAVE_DAYS = 14
+/** The parts of the view worth coming back to. Anything not listed (open message boxes, the ARCH trail) starts fresh. */
+const SAVED_UI = ['tab', 'mapView', 'comboSlot', 'fullFile', 'showReads', 'mediaFilter', 'selFile', 'selExec', 'selMedia', 'selTodo', 'selStep', 'treeSel', 'treeOpen', 'follow', 'scroll', 'hx'] as const
+let savedText = ''
+let sessionsDirReady = false
+
+async function persist($: EngineInterface) {
+  if (!sid) return
+  const home = await $.env.get('HOME')
+  if (!home) return
+  const view: Record<string, unknown> = {}
+  for (const k of SAVED_UI) view[k] = ui[k]
+  const text = JSON.stringify({ ...saveSession(S), view })
+  if (text === savedText) return
+  savedText = text
+  if (!sessionsDirReady) {
+    await $.process.run(['mkdir', '-p', `${home}/${SESSIONS_DIR}`]).catch(() => undefined)
+    sessionsDirReady = true
+  }
+  // A failed write (read-only home, test environment) only means nothing is restored later.
+  await $.fs.write(`${home}/${SESSIONS_DIR}/${sid}.json`, text).catch(() => undefined)
+}
+
+async function restoreSession($: EngineInterface) {
+  const home = await $.env.get('HOME')
+  if (!home || !sid) return
+  const text = await $.fs.read(`${home}/${SESSIONS_DIR}/${sid}.json`).catch(() => undefined)
+  const revived = reviveSession(typeof text === 'string' ? text : undefined)
+  if (!revived) return
+  S = revived
+  savedText = text as string
+  try {
+    const view = (JSON.parse(text as string) as { view?: Record<string, unknown> }).view ?? {}
+    const target = ui as Record<string, unknown>
+    for (const k of SAVED_UI) {
+      // A value of another type than the field holds now (an old file, a hand edit) is left out.
+      if (view[k] !== undefined && (target[k] === undefined || typeof target[k] === typeof view[k])) target[k] = view[k]
+    }
+  } catch {
+    // A damaged view part leaves the defaults.
+  }
+}
+
+/** Saved sessions older than SAVE_DAYS are not coming back. */
+async function cleanSessions($: EngineInterface) {
+  const home = await $.env.get('HOME')
+  if (!home) return
+  await $.process.run(['find', `${home}/${SESSIONS_DIR}`, '-name', '*.json', '-mtime', `+${SAVE_DAYS}`, '-delete']).catch(() => undefined)
+}
+
+
 /** A panel has something new: if its cell is showing another tab, mark it fresh so the tab name lights up. */
 /** Pointer position in the pane → which region to scroll. Files/Exec have two regions side by side (or stacked): list and detail scroll independently. */
 function scrollKeyAt(pointer: { column: number; row: number } | undefined): string | undefined {
@@ -191,7 +246,7 @@ function scrollKeyAt(pointer: { column: number; row: number } | undefined): stri
   if (panel !== 'files' && panel !== 'exec' && panel !== 'project') return panel === 'status' || panel === 'map' ? undefined : panel
   if (!pointer) return panel
   const innerW = cell.rect.w - 4
-  if (innerW >= WIDE) return pointer.column - cell.rect.x - 2 < splitWidths(innerW, panel === 'exec' ? 0.5 : 0.38).left ? panel : `${panel}:detail`
+  if (innerW >= WIDE) return pointer.column - cell.rect.x - 2 < splitWidths(innerW, ui.splitRatio[panel] ?? (panel === 'exec' ? 0.5 : 0.38)).left + DIVIDER ? panel : `${panel}:detail`
   return pointer.row - cell.rect.y - 2 < (cell.rect.h - 3) * 0.45 ? panel : `${panel}:detail`
 }
 
@@ -225,6 +280,7 @@ async function tick($: EngineInterface) {
   }
   if (ticks % 20 === 0 && !editing && (await loadLayout($))) $.ui.invalidate('ui.render')
   if (ticks % 50 === 25) void refreshLocation($)
+  if (ticks % 50 === 10) void persist($)
   if (archInitPending) {
     archInitPending = false
     void $.prompt.submit({ text: archInitAsk(), asUser: true }).catch(() => undefined)
@@ -702,7 +758,9 @@ async function minimize($: EngineInterface) {
 
 async function restore($: EngineInterface) {
   await setMinimized($, false)
-  await $.ui.open({ id: PANE, title: 'ASINT' }).catch(() => undefined)
+  const opened = await $.ui.open({ id: PANE, title: 'ASINT' }).catch(() => undefined)
+  // Below 144 columns the engine queues the pane and draws nothing; say so instead of looking broken.
+  if (opened && opened.isPlaced === false) $.ui.toast(t('終端機寬度不夠，加寬到 144 欄後儀表板會自動出現', 'The terminal is too narrow for the dashboard; it appears once the terminal is 144 columns wide'))
   $.ui.invalidate('ui.render')
 }
 
@@ -776,6 +834,10 @@ const OUTPUT_RULE = `# Keep deliverables in the terminal
 Write plans, specs, reports, analyses, drafts, tables and diagrams as Markdown in your reply so the terminal shows them. Do not create Claude Docs documents.
 
 When something needs to be a web page: write the .html to a file and publish it with the Artifact tool as usual (private). asint opens the local file in a browser next to the terminal (terminal-browser) and lists it under WEB in the dashboard's MEDIA panel, so your reply only needs the Artifact link and the local path, not a text copy. For pages that need trackpad zoom the user opens them with \`/html -b <path>\` in the system browser.`
+
+const CHECKLIST_RULE = `# Checklist
+
+For any task with three or more steps, call mcp__asint__checklist before the first step, send the full list on every call, mark one item in_progress while you work on it and completed as soon as it is done.`
 
 const DOCS_DENY = 'asint: the user wants deliverables written in the reply (shown in the terminal), not as Claude Docs documents. Write it as Markdown in your reply instead.'
 
@@ -854,8 +916,11 @@ function makeActions($: EngineInterface): Actions {
       lastPanel = 'project'
       ui.treeSel = path
       ui.scroll['project:detail'] = 0
+      ui.hx['project:detail'] = 0
       redraw()
     },
+    hpan: (key, dx, max) => { lastPanel = key.split(':')[0] as Panel; ui.hx[key] = Math.min(max, Math.max(0, (ui.hx[key] ?? 0) + dx)); redraw() },
+    vpan: (key, dy) => { lastPanel = key.split(':')[0] as Panel; ui.scroll[key] = Math.min(scrollMax.get(key) ?? 0, Math.max(0, (ui.scroll[key] ?? 0) + (key === 'exec:detail' ? -dy : dy))); redraw() },
     archPan: dx => { lastPanel = 'arch'; ui.archPanX = Math.max(0, ui.archPanX + dx); redraw() },
     archOpen: () => {
       if (!arch?.model) return
@@ -875,12 +940,15 @@ function makeActions($: EngineInterface): Actions {
     sendMsg: (to, text) => void sendTo($, to, text),
     nextCombo: () => { ui.comboSlot = ui.comboSlot === 0 ? 1 : 0; redraw() },
     focusAgent: id => { ui.focusAgent = id; redraw() },
-    selFile: path => { lastPanel = 'files'; ui.selFile = path; ui.fullFile = false; redraw() },
+    selFile: path => { lastPanel = 'files'; ui.selFile = path; ui.fullFile = false; ui.hx['files:detail'] = 0; redraw() },
     toggleFull: () => { ui.fullFile = !ui.fullFile; redraw() },
     toggleReads: () => { ui.showReads = !ui.showReads; redraw() },
     openExternal: path => void openFile($, path),
     openUrl: url => void openDefault($, url),
     selExec: id => { ui.selExec = ui.selExec === id ? undefined : id; redraw() },
+    selTodo: key => { lastPanel = 'todo'; ui.selTodo = key; ui.selStep = undefined; ui.scroll['todo:detail'] = 0; redraw() },
+    selStep: id => { ui.selStep = ui.selStep === id ? undefined : id; redraw() },
+    gotoExec: id => { ui.selExec = id; act.focusPanel('exec') },
     mediaFilter: f => { ui.mediaFilter = f; redraw() },
     selMedia: id => {
       ui.selMedia = id
@@ -902,6 +970,8 @@ export const register: Register = on => {
     setLang(savedLang === 'zh' || savedLang === 'en' ? savedLang : langFromLocale(locale))
     const saved = await $.store.get('skin')
     if (saved === 'hacker' || saved === 'omarchy') await update($, skin, () => saved)
+    const savedSplit = await $.store.get('splitRatio')
+    if (savedSplit && typeof savedSplit === 'object') ui.splitRatio = { ...(savedSplit as Record<string, number>) }
     await loadLayout($)
     await loadTheme($)
     await applySkin($)
@@ -909,9 +979,10 @@ export const register: Register = on => {
     $.clock.every(TICK_MS, () => void tick($))
     await $.command.register({ name: 'skin', description: t('儀表板配色：/skin hacker 磷光、/skin omarchy 跟主題；聊天欄一律磷光', 'Dashboard colors: /skin hacker for phosphor, /skin omarchy to follow the theme; the chat column is always phosphor') })
     // This Claude Code version has no TodoWrite/TaskCreate, so the agent can't make a checklist; asint provides one.
-    // The agent decides when to use it; no rule is added.
+    // isDeferred: false keeps it out of tool search; a deferred tool is never loaded unless the agent searches for it.
     await $.tool.register({
       name: 'checklist',
+      isDeferred: false,
       description: 'Show a step checklist in the asint dashboard so the user can follow progress. Send the FULL list every call; mark an item in_progress when you start it and completed as soon as it is done.',
       inputSchema: {
         type: 'object',
@@ -938,6 +1009,9 @@ export const register: Register = on => {
     S = emptySession()
     act = makeActions($)
     sid = await $.session.id()
+    savedText = ''
+    await restoreSession($)
+    void cleanSessions($)
     ui.zen = undefined
     const own = await $.store.get(`minimized:${sid}`)
     minimized = typeof own === 'boolean' ? own : (await $.store.get('minimized')) === true
@@ -1004,7 +1078,7 @@ export const register: Register = on => {
   // Two system prompt rules: deliverables stay in the terminal (always), and the agent decides on diagram updates (when the project has .c4 files).
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
-    const sections = [...r.sections, { id: 'asint:output', text: OUTPUT_RULE, scope: 'session' as const }]
+    const sections = [...r.sections, { id: 'asint:output', text: OUTPUT_RULE, scope: 'session' as const }, { id: 'asint:checklist', text: CHECKLIST_RULE, scope: 'session' as const }]
     const dirs = await archBaseDirs($).catch(() => [] as string[])
     const paths: string[] = []
     for (const d of dirs) for (const f of await $.fs.list(d).catch(() => [])) if (f.kind === 'file' && ARCH_EXT.test(f.name)) paths.push(`${d}/${f.name}`)
@@ -1056,7 +1130,26 @@ export const register: Register = on => {
 
   // The editor sends the new layout on mouse release: validate and save it.
   on('ui.message', { requestId: PANE }, async ($, e, next) => {
-    const data = e.data as { layout?: unknown }
+    const data = e.data as { layout?: unknown; pick?: string; split?: { panel: string; left: number; total: number; final: boolean } }
+    // A click on a row drawn by a Client module (the running command and the running checklist item): it reports what it stands for.
+    if (typeof data?.pick === 'string') {
+      const [kind, ...rest] = data.pick.split(':')
+      const id = rest.join(':')
+      if (kind === 'exec') { lastPanel = 'exec'; ui.selExec = id }
+      else if (kind === 'todo') { lastPanel = 'todo'; ui.selTodo = id; ui.selStep = undefined; ui.scroll['todo:detail'] = 0 }
+      $.ui.invalidate('ui.render')
+      if (!paneFocused) void $.ui.open({ id: PANE, title: paneTitle(), focus: true, ...(requestedCols ? { columns: requestedCols } : {}) }).catch(() => undefined)
+      return next(e)
+    }
+    if (data?.split) {
+      const d = data.split
+      if (Number.isFinite(d.left) && Number.isFinite(d.total) && typeof d.panel === 'string') {
+        ui.splitRatio[d.panel] = ratioFromDrag(d.left, d.total)
+        $.ui.invalidate('ui.render')
+        if (d.final) await $.store.set('splitRatio', ui.splitRatio)
+      }
+      return next(e)
+    }
     if (data && data.layout) {
       const next2 = parseLayout(JSON.stringify(data.layout))
       await saveLayout($, next2)
@@ -1131,6 +1224,7 @@ export const register: Register = on => {
     } else {
       S.vitals.turnRunning = false
       hadReply = true
+      void persist($)
       // A denied or interrupted tool never finishes its tool.call, so clear the live edit when the turn ends.
       live = undefined
       await refreshUsage($)
@@ -1454,13 +1548,15 @@ export const register: Register = on => {
     const expandLabel = t('▣ 儀表板', '▣ Dashboard')
     const plainLabel = t('白話', 'Plain')
     const archLabel = t('架構圖', 'Arch diagram')
+    const showExpand = minimized || !paneOpen
     const buttons = [
-      minimized ? <Button key="expand" plain dimColor label={expandLabel} onPress={() => void restore($)} /> : null,
+      // Not only after Minimize: the engine also drops or queues the pane on a narrow terminal, which leaves no way back in.
+      showExpand ? <Button key="expand" plain dimColor label={expandLabel} onPress={() => void restore($)} /> : null,
       hadReply ? <Button key="plain" plain dimColor label={plainLabel} onPress={() => { void $.command.run({ command: 'btw', args: PLAIN_ASK } as never) }} /> : null,
       <Button key="arch-init" plain dimColor label={archLabel} onPress={() => { archInitPending = true }} />,
     ].filter(x => x !== null)
     // Each button takes its label width plus the 3-column gap.
-    const rightWidth = cells(vitalsCompactText(S.vitals)) + (minimized ? cells(expandLabel) + 3 : 0) + (hadReply ? cells(plainLabel) + 3 : 0) + cells(archLabel) + 3
+    const rightWidth = cells(vitalsCompactText(S.vitals)) + (showExpand ? cells(expandLabel) + 3 : 0) + (hadReply ? cells(plainLabel) + 3 : 0) + cells(archLabel) + 3
     // Share a row with the stats only if the location row still fits the name, repo and 16 columns of cwd.
     const oneRow = !loc || headWidth(loc, title) + 16 + 3 + rightWidth <= width
     const right = (

@@ -1,12 +1,14 @@
 import { test, expect } from 'claude-code/testing'
 
+import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '../hooks/views'
+import { emptySession, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
 
 const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 let clock = 1_000_000
 
 // Minimal fake answers for engine calls the test harness does not implement.
-const host = (on: any, rec: { opens: any[]; closes: any[] } = { opens: [], closes: [] }) => {
+const host = (on: any, rec: { opens: any[]; closes: any[]; placed?: boolean; fileText?: string } = { opens: [], closes: [] }) => {
   const kv = new Map<string, unknown>()
   on('store.get', (_$: unknown, e: { key: string }) => ({ value: kv.get(e.key) }))
   on('store.set', (_$: unknown, e: { key: string; value: unknown }) => (kv.set(e.key, e.value), { value: undefined }))
@@ -17,10 +19,10 @@ const host = (on: any, rec: { opens: any[]; closes: any[] } = { opens: [], close
   on('env.get', (_$: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/nonexistent' : undefined }))
   on('fs.list', () => ({ value: [] }))
   on('fs.exists', () => ({ value: false }))
-  on('fs.read', () => ({ value: 'line1\nline2\n' }))
+  on('fs.read', () => ({ value: rec.fileText ?? 'line1\nline2\n' }))
   on('fs.write', () => ({ value: undefined }))
   on('process.run', () => out(''))
-  on('ui.open', (_$: unknown, e: any) => (rec.opens.push(e), { value: { isPlaced: true } }))
+  on('ui.open', (_$: unknown, e: any) => (rec.opens.push(e), { value: { isPlaced: rec.placed ?? true } }))
   on('ui.close', (_$: unknown, e: any) => (rec.closes.push(e), { value: undefined }))
   on('command.register', () => ({ value: undefined }))
   on('clock.every', () => ({ value: undefined }))
@@ -251,4 +253,156 @@ test('without the keys, no cell gets the heavy border', async ($, on) => {
   await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
   const ui: any = await mount($)
   expect((await ui.findAll({ type: 'Box' })).filter((b: any) => b.props?.borderStyle === 'bold').length).toBe(0)
+})
+
+const aboveProps = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 } }
+const above = ($: any) => $.ui.mount({ plugin: 'asint', surface: 'terminal', component: 'AbovePrompt', props: aboveProps } as never)
+
+test('the Dashboard button shows whenever the pane is not on screen, not only after Minimize', async ($, on) => {
+  host(on)
+  on('ui.render', ($$: any, e: any) => (globalThis as any).h($$.ui.resolve(e).Box, {}))
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  // The engine has not drawn the pane (a narrow terminal queues it), and nobody pressed Minimize.
+  expect(await (await above($)).find({ key: 'expand' })).toBeTruthy()
+  await mount($)
+  expect(await (await above($)).find({ key: 'expand' })).toBeFalsy()
+})
+
+test('pressing the Dashboard button on a terminal too narrow for the pane says why', async ($, on) => {
+  const toasts: any[] = []
+  host(on, { opens: [], closes: [], placed: false })
+  on('ui.toast', (_$: unknown, e: any) => (toasts.push(e), { value: undefined }))
+  on('ui.render', ($$: any, e: any) => (globalThis as any).h($$.ui.resolve(e).Box, {}))
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await (await above($)).press({ key: 'expand' })
+  await new Promise(r => setTimeout(r, 20))
+  expect(JSON.stringify(toasts)).toContain('144')
+})
+
+test('code previews scroll sideways: lines shift left, a diff keeps its marker, short files offer no scroll', () => {
+  const long = '0123456789'.repeat(12)
+  expect(hshift(['abcdef', 'xy'], 2, false)).toEqual(['cdef', ''])
+  expect(hshift(['+abcdef', ' xy'], 2, true)).toEqual(['+cdef', ' '])
+  expect(hshift(['abc'], 0, false)).toEqual(['abc'])
+  expect(hmax(['short line'], 80)).toBe(0)
+  expect(hmax([long], 80)).toBe(long.length - 40)
+})
+
+test('FILES preview: a long line shows the scroll buttons, and ▶ shifts the code left', async ($, on) => {
+  const long = 'const veryLongName = ' + 'x'.repeat(200) + '\n'
+  host(on, { opens: [], closes: [], fileText: long.repeat(5) })
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await $.tool.call({ tool: 'Edit', tool_use_id: 't1', file_path: '/w/hooks/a.ts', old_string: 'a', new_string: 'b' } as never)
+  const ui: any = await mount($)
+  await ui.press({ key: 'full' })
+  expect(await ui.find({ key: 'files:detail-right' })).toBeTruthy()
+  const before = (await ui.find({ type: 'Code' })).props.source as string
+  await ui.press({ key: 'files:detail-right' })
+  const after = (await ui.find({ type: 'Code' })).props.source as string
+  expect(after).not.toBe(before)
+  expect(after.length).toBeLessThan(before.length)
+})
+
+test('every scrollable card has ▼ and ▲ (j and k); FILES scrolls its preview', async ($, on) => {
+  const text = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n')
+  host(on, { opens: [], closes: [], fileText: text })
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await $.tool.call({ tool: 'Edit', tool_use_id: 't1', file_path: '/w/hooks/a.ts', old_string: 'a', new_string: 'b' } as never)
+  const ui: any = await mount($)
+  await ui.press({ key: 'full' })
+  // The buttons read the sizes of the previous draw, so draw once more (a toggle there and back).
+  await ui.press({ key: 'reads' })
+  await ui.press({ key: 'reads' })
+  const first = async () => String((await ui.find({ type: 'Code' })).props.source).split('\n')[0]
+  expect(await first()).toBe('line 1')
+  await ui.press({ key: 'down-files' })
+  const down = await first()
+  expect(down).not.toBe('line 1')
+  await ui.press({ key: 'up-files' })
+  expect(await first()).toBe('line 1')
+})
+
+test('dragging the divider: the drag column becomes a ratio that gives back the same widths, and neither side gets too narrow', () => {
+  const total = 120
+  const r = ratioFromDrag(40, total)
+  expect(splitWidths(total, r).left).toBe(40)
+  expect(splitWidths(total, r).left + DIVIDER + splitWidths(total, r).right).toBe(total)
+  expect(splitWidths(total, ratioFromDrag(0, total)).left).toBeGreaterThanOrEqual(16)
+  expect(splitWidths(total, ratioFromDrag(500, total)).right).toBeGreaterThanOrEqual(16)
+})
+
+test('a card in zen draws a divider the user can grab, and a dragged ratio reaches the layout', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: 'npm test', description: 'run tests' } as never)
+  const ui: any = await mount($)
+  await ui.press({ key: 'zen-exec' })
+  const divider = (await ui.findAll({ type: 'Client' })).find((n: any) => String(n.props?.module).endsWith('divider.tsx'))
+  expect(divider).toBeTruthy()
+  expect(divider.props.props.panel).toBe('exec')
+})
+
+test('TODO steps: the commands and tool calls of whoever worked on the item, while it was in progress, oldest first', () => {
+  const s = emptySession()
+  const item = { key: 'k', content: 'wire up data', status: 'completed' as const, startedAt: 1000, doneAt: 9000, by: 'main' as const }
+  s.execs.push(
+    { id: 'e0', who: 'main', command: 'ls before', startedAt: 500, endedAt: 600, status: 'ok', exit: 0 },
+    { id: 'e1', who: 'main', command: 'npm test', description: 'run tests', startedAt: 2000, endedAt: 3000, status: 'ok', exit: 0 },
+    { id: 'e2', who: 'agent-1', command: 'other agent', startedAt: 2500, endedAt: 2600, status: 'ok', exit: 0 },
+    { id: 'e3', who: 'main', command: 'after', startedAt: 9500, endedAt: 9600, status: 'ok', exit: 0 },
+  )
+  s.log.push({ at: 1500, who: 'main', kind: 'tool', text: 'Edit a.ts', op: 'E' }, { at: 1600, who: 'main', kind: 'turn', text: 'ignored' })
+  const steps = todoSteps(s, item, 20000)
+  expect(steps.map(x => x.text)).toEqual(['Edit a.ts', 'run tests'])
+  expect(todoSteps(s, { ...item, startedAt: undefined }, 20000)).toEqual([])
+})
+
+test('TODO: picking an item shows its steps, and a step opens inline with its command', async ($, on) => {
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await $.tool.call({ tool: 'TodoWrite', tool_use_id: 'd1', todos: [
+    { content: 'write tests', status: 'in_progress', activeForm: 'Writing tests' },
+    { content: 'wrap up', status: 'pending', activeForm: 'Wrapping up' },
+  ] } as never)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: 'npm test', description: 'run tests' } as never)
+  const ui: any = await mount($)
+  expect(await texts(ui)).toContain('run tests')
+  await ui.press({ key: 'tsel-1' })
+  expect(await texts(ui)).toContain('wrap up')
+  expect(await texts(ui)).toContain('Not started yet')
+})
+
+test('saving a session and reading it back keeps the data; what was running comes back as interrupted', () => {
+  const s = emptySession()
+  s.todos.push({ key: 'k', content: 'wire up data', status: 'in_progress', startedAt: 1000 })
+  s.execs.push({ id: 'e1', who: 'main', command: 'npm test', startedAt: 2000, status: 'running' }, { id: 'e2', who: 'main', command: 'ls', startedAt: 2500, endedAt: 2600, status: 'ok', exit: 0, stdout: 'x'.repeat(SAVED_OUTPUT + 5) })
+  s.agents.set('a1', { id: 'a1', label: 'research', type: 'Explore', startedAt: 3000, status: 'running', doing: 'Grep x' })
+  s.files.set('/w/a.ts', { path: '/w/a.ts', op: 'M', count: 2, lastAt: 4000, lastOp: 'M', by: ['main'], diff: ['-a', '+b'] })
+  s.vitals.turnRunning = true
+  const back = reviveSession(JSON.stringify(saveSession(s)))!
+  expect(back.todos[0]!.content).toBe('wire up data')
+  expect(back.execs[0]!.status).toBe('error')
+  expect(back.execs[1]!.status).toBe('ok')
+  expect(back.execs[1]!.stdout!.length).toBe(SAVED_OUTPUT)
+  expect(back.agents.get('a1')!.status).toBe('error')
+  expect(back.agents.get('a1')!.doing).toBeUndefined()
+  expect(back.files.get('/w/a.ts')!.diff).toEqual(['-a', '+b'])
+  expect(back.vitals.turnRunning).toBe(false)
+})
+
+test('a damaged or foreign saved file starts the session empty', () => {
+  expect(reviveSession(undefined)).toBeUndefined()
+  expect(reviveSession('not json')).toBeUndefined()
+  expect(reviveSession('{"v":2}')).toBeUndefined()
+  expect(reviveSession('{"v":1,"files":{}}')).toBeUndefined()
+})
+
+test('a resumed session shows its saved checklist and picks up the view it was left in', async ($, on) => {
+  const s = emptySession()
+  s.todos.push({ key: 'k', content: 'saved checklist item', status: 'completed', startedAt: 1000, doneAt: 2000, by: 'main' })
+  const saved = JSON.stringify({ ...saveSession(s), view: { selTodo: 'k', showReads: false, tab: 'nonsense-type-is-fine' } })
+  host(on, { opens: [], closes: [], fileText: saved })
+  await $.session.start({ source: 'resume', cwd: '/w' } as never).catch(() => {})
+  const ui: any = await mount($)
+  expect(await texts(ui)).toContain('saved checklist item')
 })
