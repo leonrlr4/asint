@@ -7,7 +7,7 @@ import { type Cell, compute, type LayoutNode, type Panel } from './layout'
 import { lineOf, type LiveEdit } from './live'
 import { agentSpots, agentsOf, type MapView } from './map'
 
-import { changesList, type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
+import { changesList, isBusy, type Exec, type FileEntry, fmtClock, fmtDur, isMedia as isMediaPath, type Media, type MediaKind, type Session, short, whoLabel } from './model'
 import { mix } from './palette'
 import { MINI_COLS, miniOf, renderSprite, roleOf, runsOf, SPRITE_COLS, SPRITE_ROWS } from './sprites'
 import { badgeOf, hotDirs, hotFilesOf, statusOf, type GitState, type StatusKind, type Tone } from './tree'
@@ -697,6 +697,7 @@ export function todoTab(c: ViewCtx, maxRows: number) {
   const { Box, Text, Button } = el
   if (!s.todos.length) return <Text color={p.muted}>{t('這個 session 目前沒有 checklist；agent 開清單時會出現在這裡。', 'No checklist in this session. It appears here when the agent starts one.')}</Text>
   const wide = isWide(c)
+  const busy = isBusy(s)
   const sel = s.todos.find(x => x.key === ui.selTodo) ?? s.todos.find(x => x.status === 'in_progress') ?? s.todos.at(-1)!
   const listRows = wide ? maxRows : Math.max(3, Math.min(s.todos.length, Math.floor(maxRows * 0.4)))
   const list = (w: number) => {
@@ -705,6 +706,14 @@ export function todoTab(c: ViewCtx, maxRows: number) {
       <Box flexDirection="column" width={w}>
         {s.todos.slice(start, start + listRows).map((td, i) => {
           const on = td.key === sel.key
+          if (td.status === 'in_progress' && !busy)
+            return (
+              <Box key={`todo-${i}`} flexDirection="row" backgroundColor={on ? p.surface : undefined}>
+                <Text color={p.warn}>{on ? '▸' : ' '}⏸ </Text>
+                <Box flexGrow={1} flexShrink={1}><Button key={`tsel-${i}`} plain label={clip(td.content, Math.max(8, w - 24))} onPress={() => act.selTodo(td.key)} /></Box>
+                <Text color={p.warn}> {t('等你', 'waiting')} {(td.startedAt ? fmtDur(now - td.startedAt) : '').padStart(6)}</Text>
+              </Box>
+            )
           if (td.status === 'in_progress')
             return <el.Client key={`todo-${i}`} module="./shimmer.tsx" props={{ text: td.content, pick: `todo:${td.key}`, palette: p, skin, elapsedMs: td.startedAt ? now - td.startedAt : 0, suffix: td.startedAt ? fmtClock(td.startedAt) : '', pad: 6, width: w, lang: getLang() }} />
           const done = td.status === 'completed'
@@ -752,8 +761,9 @@ function todoDetail(c: ViewCtx, td: Session['todos'][number], width: number, row
   const { Box, Text, Button, Code } = el
   const steps = todoSteps(s, td, now)
   const done = td.status === 'completed'
-  const state = done ? t('完成', 'Done') : td.status === 'in_progress' ? t('進行中', 'In progress') : t('還沒開始', 'Pending')
-  const stateColor = done ? p.success : td.status === 'in_progress' ? p.accent : p.muted
+  const working = isBusy(s)
+  const state = done ? t('完成', 'Done') : td.status === 'in_progress' ? (working ? t('進行中', 'In progress') : t('等你回覆', 'Waiting for you')) : t('還沒開始', 'Pending')
+  const stateColor = done ? p.success : td.status === 'in_progress' ? (working ? p.accent : p.warn) : p.muted
   const open = steps.find(x => x.exec && x.exec.id === ui.selStep)?.exec
   // The opened command takes the lower part; the step list gets what is left, at least three rows.
   const lower = open ? Math.min(10, Math.max(5, Math.floor(rows * 0.45))) : 0

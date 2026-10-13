@@ -4,7 +4,7 @@ import { DIVIDER, hmax, hshift, ratioFromDrag, splitWidths, todoSteps } from '..
 import { filesVim, treeVim } from '../hooks/vim'
 import { gitQueries, listArgv, parseListing, TREE_MAX } from '../hooks/tree'
 import { badgeOf, hotDirs, hotFilesOf, isHot, parseGit, statusOf } from '../hooks/tree'
-import { changesList, emptySession, endAgentFromNotification, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
+import { changesList, emptySession, endAgentFromNotification, isBusy, reviveSession, saveSession, SAVED_OUTPUT } from '../hooks/model'
 import { compute, DEFAULT_LAYOUT, isLeaf, movePanel, parseLayout, resize } from '../hooks/layout'
 
 const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
@@ -852,4 +852,27 @@ test('a finished edit highlights the lines its new content fills', () => {
   expect(editedLines({ tool: 'Edit', new: 'b\nc' }, 'a\nb\nc\nd')).toEqual({ from: 1, to: 2 })
   expect(editedLines({ tool: 'Write', new: 'x\ny\nz' }, 'x\ny\nz')).toEqual({ from: 0, to: 2 })
   expect(editedLines({ tool: 'Edit', new: 'missing' }, 'a')).toEqual({ from: 0, to: 0 })
+})
+
+test('a checklist item that is in progress while nothing runs is waiting for the user, not running', async ($, on) => {
+  const s = emptySession()
+  expect(isBusy(s)).toBe(false)
+  s.vitals.turnRunning = true
+  expect(isBusy(s)).toBe(true)
+  s.vitals.turnRunning = false
+  s.agents.set('a1', { id: 'a1', label: 'job', type: 'Plan', startedAt: 1, status: 'running' })
+  expect(isBusy(s)).toBe(true)
+  s.agents.get('a1')!.status = 'done'
+  s.execs.push({ id: 'e', who: 'main', command: 'sleep 1', startedAt: 1, status: 'background' })
+  expect(isBusy(s)).toBe(true)
+  s.execs[0]!.status = 'ok'
+  expect(isBusy(s)).toBe(false)
+
+  host(on)
+  await $.session.start({ source: 'startup', cwd: '/w' } as never).catch(() => {})
+  await $.tool.call({ tool: 'TodoWrite', tool_use_id: 'd1', todos: [{ content: 'ask the user first', status: 'in_progress', activeForm: 'Asking' }] } as never)
+  const ui: any = await mount($)
+  const all = await texts(ui)
+  expect(all).toContain('waiting')
+  expect(all).toContain('Waiting for you')
 })

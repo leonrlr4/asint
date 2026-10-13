@@ -317,3 +317,10 @@ export function endAgentFromNotification(s: Session, text: string, now: number):
   upsertAgent(s, { ...a, status: status === 'completed' ? 'done' : 'error', endedAt: now, doing: undefined })
   return true
 }
+
+/**
+ * Whether anything is actually working right now: the main turn, a subagent or a command. A checklist item can say "in progress"
+ * while none of these is true (the turn ended on a question for the user), and then it is waiting, not running.
+ */
+export const isBusy = (s: Session): boolean =>
+  s.vitals.turnRunning || [...s.agents.values()].some(a => a.status === 'running') || s.execs.some(x => x.status === 'running' || x.status === 'background')
