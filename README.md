@@ -61,6 +61,12 @@ A session is saved to `~/.cache/asint/sessions/<id>.json` every few seconds and 
 
 asint reads the model's tool calls while they stream. When Claude starts an Edit or Write, FILES jumps to that file, marks it `✎`, and shows the replaced lines struck through in red and the new text growing in green with a cursor. When the tool finishes, the changed lines stay highlighted for a few seconds.
 
+### Agents
+
+![ORCH](docs/screenshots/orch.png)
+
+ORCH shows every agent as a card with a pixel worker whose hat says what kind of agent it is: an explorer, a planner, a reviewer, a tester, a designer, a developer, a writer and more. A running agent has a full card, a border that glows and fades, a bar that sweeps while it works and one plain line for what it is doing right now ("Reading client.ts", the description Claude gave a command). Finished agents sit below a divider as smaller cards with a check or a cross. Click a card for its latest steps; CHANGES then lists only the files that agent touched.
+
 ### Talk to any agent
 
 ![Agent map](docs/screenshots/map.png)

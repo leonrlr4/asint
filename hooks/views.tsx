@@ -883,8 +883,8 @@ export function projectTab(c: ViewCtx, maxRows: number) {
         <Box flexDirection="row" columnGap={1}>
           <Button key="changed" plain dimColor={!ui.treeChanged} label={ui.treeChanged ? t('● 只看動過的', '● Changed only') : t('○ 只看動過的', '○ Changed only')} onPress={act.toggleChanged} />
           <Text color={p.faint}>{hotFiles.length ? t(`${hotFiles.length} 個動過`, `${hotFiles.length} changed`) : ''}</Text>
-          {ui.treeRoot ? <Button key="root-reset" plain dimColor label={t('⌂ 回到 session 資料夾', '⌂ Back to the session folder')} onPress={() => act.setRoot(undefined)} /> : null}
         </Box>
+        {ui.treeRoot ? <Button key="root-reset" plain dimColor label={t('← 回到 session 的資料夾', '← Back to the session folder')} onPress={() => act.setRoot(undefined)} /> : null}
         {c.suggestRoot && c.suggestRoot !== project.root ? (
           <Box flexDirection="row" columnGap={1}>
             <Text color={p.warn}>{t('正在改這個資料夾外的檔案', 'Editing outside this tree')}</Text>
@@ -1192,9 +1192,9 @@ export function logTab(c: ViewCtx, maxRows: number) {
     <Box flexDirection="column">
       {[...s.log].reverse().slice(scrollAt(c, 'log', s.log.length - maxRows), scrollAt(c, 'log', s.log.length - maxRows) + maxRows).map((e, i) => (
         <Box key={`log-${i}`} flexDirection="row">
-          <Text color={p.faint}>{fmtClock(e.at)} </Text>
-          <Text color={p.muted}>{clip(whoLabel(s, e.who), 8).padEnd(8)} </Text>
-          <Box flexGrow={1}><Text color={color(e.kind)} wrap="truncate-end">{e.text}</Text></Box>
+          <Box width={9} flexShrink={0}><Text color={p.faint}>{fmtClock(e.at)} </Text></Box>
+          <Box width={9} flexShrink={0}><Text color={p.muted} wrap="truncate-end">{clip(whoLabel(s, e.who), 8).padEnd(8)} </Text></Box>
+          <Box flexGrow={1} flexShrink={1}><Text color={color(e.kind)} wrap="truncate-end">{e.text}</Text></Box>
         </Box>
       ))}
     </Box>
@@ -1253,7 +1253,7 @@ function orchTab(c: ViewCtx, maxRows: number) {
       : x.status === 'error' ? p.error
       : x.status === 'done' ? mix(p.faint, p.success, 0.3)
       : p.faint
-  const divider = (label: string) => <Text color={p.faint} wrap="truncate-end">{`── ${label} ${'─'.repeat(Math.max(2, width - label.length - 4))}`}</Text>
+  const divider = (label: string) => <Box flexShrink={0}><Text color={p.faint} wrap="truncate-end">{`── ${label} ${'─'.repeat(Math.max(2, width - label.length - 4))}`}</Text></Box>
   // Running agents get a full card with their worker; the finished ones shrink to a two-line card below a divider, so the room goes to what is moving.
   const live = cards.filter(x => x.status === 'running' || x.id === 'main')
   const past = cards.filter(x => !live.includes(x))
@@ -1287,13 +1287,13 @@ function orchTab(c: ViewCtx, maxRows: number) {
         <Text color={failed ? p.error : p.faint}>{t('失敗', 'Failed')} {failed}</Text>
       </Box>
       {divider(`${t('進行中', 'Working')} ${live.length}`)}
-      <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start">
+      <Box flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start" flexShrink={0}>
         {live.slice(start, start + visible).map(x => {
           const end = x.endedAt ?? now
           const files = filesOf(x.id)
           const barW = Math.max(6, infoW - 9)
           return (
-            <Box key={`oc-${x.id}`} flexDirection="column" width={cardW} borderStyle="round" borderColor={borderOf(x)} paddingX={1}>
+            <Box key={`oc-${x.id}`} flexDirection="column" width={cardW} flexShrink={0} borderStyle="round" borderColor={borderOf(x)} paddingX={1}>
               <Box flexDirection="row" columnGap={2}>
                 <Box width={SPRITE_COLS} flexShrink={0} flexDirection="column">{sprite(x)}</Box>
                 <Box flexDirection="column" width={infoW}>
@@ -1328,7 +1328,7 @@ function orchTab(c: ViewCtx, maxRows: number) {
             <Text key={`mh-${x.id}-${i}`}>{runsOf(row).map((r, k) => <Text key={k} color={r.fg} backgroundColor={r.bg}>{r.ch}</Text>)}</Text>
           ))
           return (
-            <Box key={`op-${x.id}`} flexDirection="column" width={cardW} borderStyle="round" borderColor={borderOf(x)} paddingX={1}>
+            <Box key={`op-${x.id}`} flexDirection="column" width={cardW} flexShrink={0} borderStyle="round" borderColor={borderOf(x)} paddingX={1}>
               <Box flexDirection="row" columnGap={1}>
                 <Box width={MINI_COLS} flexShrink={0} flexDirection="column">{head}</Box>
                 <Box flexDirection="column" flexGrow={1} flexShrink={1}>
