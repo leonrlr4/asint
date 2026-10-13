@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 
 import { FIXTURES } from './fixtures'
-import { chatPaletteFor, contrast, FALLBACK, fromFootIni, fromKitty, fromToml, HACKER, paletteFor, sourcesFor } from '../hooks/palette'
+import { chatPaletteFor, contrast, FALLBACK, fromFootIni, fromKitty, fromToml, HACKER, paletteFor, phosphor, readableOn, sourcesFor } from '../hooks/palette'
 import { pngSize } from '../hooks/image'
 
 const fixture = (name: string) => FIXTURES[name]!
@@ -59,4 +59,16 @@ test('phosphor text sits on the theme background: the chat column always, the da
   expect(paletteFor('omarchy', theme)).toEqual(theme)
   const hacker = paletteFor('hacker', theme)
   expect([hacker.accent, hacker.bg]).toEqual([HACKER.accent, theme.bg])
+})
+
+test('on a light theme the phosphor chat colors are darkened until they can be read; on a dark one they do not change', () => {
+  const light = { ...HACKER, bg: '#f4eeea', surface: '#ebe4df' }
+  const lightChat = phosphor(light)
+  expect(contrast(lightChat.hi, light.bg)).toBeGreaterThanOrEqual(7)
+  expect(contrast(lightChat.base, light.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrast(lightChat.muted, light.bg)).toBeGreaterThanOrEqual(3)
+  expect(contrast(lightChat.error, light.bg)).toBeGreaterThanOrEqual(4.5)
+  const dark = { ...HACKER, bg: '#0e1a1a', surface: '#142222' }
+  expect(phosphor(dark)).toEqual({ ...HACKER, bg: dark.bg, surface: dark.surface })
+  expect(readableOn('#7dff9a', '#050805', 7)).toBe('#7dff9a')
 })

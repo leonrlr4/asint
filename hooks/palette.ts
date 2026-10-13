@@ -219,8 +219,33 @@ export const sourcesFor = (term: string): [string, Parser][] => {
   return [KITTY, GHOSTTY, FOOT, TOML]
 }
 
-/** Phosphor text colors over the theme's own backgrounds, so a block of color never shows a black the theme doesn't have. */
-export const phosphor = (theme: Palette): Palette => ({ ...HACKER, bg: theme.bg, surface: theme.surface })
+/** Darkens `color` toward black until it reads against `bg` at the given contrast; a color that already does is returned as it is. */
+export function readableOn(color: string, bg: string, min: number): string {
+  // Only a background lighter than the color needs this; on a dark theme the colors stay exactly as they were designed.
+  if (luminance(bg) <= luminance(color)) return color
+  let out = color
+  for (let step = 1; step <= 20 && contrast(out, bg) < min; step++) out = mix(color, '#000000', step / 20)
+  return out
+}
+
+/**
+ * Phosphor text colors over the theme's own backgrounds, so a block of color never shows a black the theme doesn't have. The greens
+ * were chosen for a near-black background; on a light theme each is darkened until it keeps its contrast (7:1 for the main text,
+ * 4.5:1 for body text, 3:1 for dim text, 2:1 for the faintest), so changing the system theme to a light one leaves every word readable.
+ */
+export const phosphor = (theme: Palette): Palette => ({
+  ...HACKER,
+  bg: theme.bg,
+  surface: theme.surface,
+  hi: readableOn(HACKER.hi, theme.bg, 7),
+  base: readableOn(HACKER.base, theme.bg, 4.5),
+  accent: readableOn(HACKER.accent, theme.bg, 4.5),
+  muted: readableOn(HACKER.muted, theme.bg, 3),
+  faint: readableOn(HACKER.faint, theme.bg, 2),
+  success: readableOn(HACKER.success, theme.bg, 4.5),
+  warn: readableOn(HACKER.warn, theme.bg, 4.5),
+  error: readableOn(HACKER.error, theme.bg, 4.5),
+})
 
 /**
  * The chat column (messages, spinner, turn line, prompt bar) is phosphor under every theme; the dashboard follows the theme,
