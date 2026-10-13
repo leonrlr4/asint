@@ -1,6 +1,6 @@
 {
   "name": "asint",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A terminal dashboard for Claude Code: live session panels, clickable architecture diagrams, an agent radar you can message, and a prompt bar that shows where you are",
   "author": {
     "name": "leonrlr4"
